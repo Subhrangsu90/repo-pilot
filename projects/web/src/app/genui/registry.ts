@@ -4,8 +4,11 @@ import { ContributorList } from './components/contributor-list';
 import { ErrorFallback } from './components/error-fallback';
 import { Grid } from './components/grid';
 import { IssueTable } from './components/issue-table';
+import { PrCard } from './components/pr-card';
+import { PrList } from './components/pr-list';
 import { Section } from './components/section';
 import { StatCard } from './components/stat-card';
+import { StepTimeline } from './components/step-timeline';
 import { GENUI_REGISTRY, GenUiRegistry } from './registry-token';
 
 /**
@@ -19,6 +22,9 @@ export const REGISTRY: GenUiRegistry = {
   ActivityChart,
   IssueTable,
   ContributorList,
+  PrCard,
+  PrList,
+  StepTimeline,
   ErrorFallback,
 };
 

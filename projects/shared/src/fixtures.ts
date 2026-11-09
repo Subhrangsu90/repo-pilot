@@ -157,8 +157,33 @@ export const partiallyBroken: UiNode = {
   },
 };
 
+export const prList: UiNode = {
+  component: 'PrList',
+  props: {
+    title: 'Open pull requests',
+    items: [
+      {
+        number: 15,
+        title: 'Add rate limiting to login',
+        author: 'octocat',
+        state: 'open',
+        ci: 'success',
+        reviewers: ['hubot'],
+        labels: ['enhancement', 'security'],
+        ageDays: 3,
+        additions: 24,
+        deletions: 3,
+        url: 'https://github.com/octocat/repopilot-demo/pull/15',
+      },
+      { number: 16, title: 'Add API reference', author: 'monalisa', state: 'draft', ci: 'pending', ageDays: 2, additions: 22, deletions: 0 },
+      { number: 17, title: 'Filter notes by tag', author: 'dependabot[bot]', state: 'open', ci: 'failure', ageDays: 19, additions: 5, deletions: 0 },
+    ],
+  },
+};
+
 export const fixtures: Fixture[] = [
   { id: 'health-report', label: 'Health report', node: healthReport },
+  { id: 'pr-list', label: 'Pull requests', node: prList },
   { id: 'issue-picker', label: 'Selectable issues', node: issuePicker },
   { id: 'partially-broken', label: 'One bad child', node: partiallyBroken },
   { id: 'invalid-props', label: 'Invalid props', node: invalidProps },

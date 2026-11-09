@@ -67,9 +67,24 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 
 - [x] Week 1 – workspace, shared catalog, `GenUiHost`, 7 components, playground at `/playground`.
       Gate: health-report fixture renders; invalid nodes render `ErrorFallback` in place.
-- [ ] Week 2 – agent server: LLM provider interface, Octokit read tools, SSE stream,
-      `AgentSession` signals, `StepTimeline`, `PrList`/`PrCard`. Gate: "Show my open PRs" on real data.
-- [ ] Week 3 – approval gate, dry-run, `ApprovalCard`, `FormSurface`, audit log + undo.
+- [x] Week 2 – agent server and chat. Gate passed 2026-11-10: "Show my open PRs" streams a real
+      `PrList` (Gemini and local Gemma). Done: provider interface (Gemini REST with fallback, Ollama
+      with tag resolution), GitHub client (fetch, REST + GraphQL; no Octokit dependency), read tools
+      `list_pull_requests` / `list_issues` / `get_repo_health` / `render_ui`, agent loop, in-memory
+      runs + SSE, `AgentSession` signals + pure `applyEvent` reducer, chat page, `PrCard` / `PrList` /
+      `StepTimeline`. Open: Claude provider (no key to test yet).
+- [ ] Week 3 – approval gate, dry-run, `ApprovalCard`, `FormSurface`, audit log + undo. First read
+      tool that returns issue/PR bodies must be tested against prompt-injection issue #8.
 - [ ] Week 4 – `DiffViewer` review, client tools, Playwright e2e, OAuth, deploy.
 
-Week 2 needs from the user: Gemini API key, a `repopilot-demo` repo, a fine-grained PAT.
+## Agent server notes
+
+- `POST /api/runs {prompt, threadId?}` → `{runId, threadId}`; `GET /api/runs/:id/events` is SSE with
+  AG-UI-named events (`projects/shared/src/events.ts`). Runs buffer events, so late clients replay.
+- Tools return `{ data (for the model), ui (UiNode for the user), detail (timeline) }`. UI is
+  validated in the loop before streaming; non-read tools are refused in `runTool` until week 3.
+- If the model fails after UI is on screen, the run finishes with a "no summary" note instead of
+  an error (quota/503 resilience for live demos). A failed run rolls the thread back.
+- Gemini free tier: newest Flash models often 503; daily/minute quota (429) runs out quickly when
+  testing. Use `LLM_PROVIDER=ollama` (env var overrides `.env`) to keep working offline.
+- Gemini 3 function calls carry thought signatures: assistant turns keep `raw` parts and replay them.

@@ -32,7 +32,8 @@ export type UiNode = z.infer<typeof UiNodeSchema>;
 
 const children = z.array(UiNodeSchema).max(24);
 const tone = z.enum(['neutral', 'good', 'warning', 'danger']);
-const githubLogin = z.string().regex(/^[A-Za-z0-9-]{1,39}$/, 'Not a valid GitHub login');
+// GitHub logins, plus app accounts such as "dependabot[bot]".
+const githubLogin = z.string().regex(/^[A-Za-z0-9-]{1,39}(\[bot\])?$/, 'Not a valid GitHub login');
 
 // ---------------------------------------------------------------------------
 // Props schemas (unknown keys are stripped, so harmless extra fields from the
@@ -115,6 +116,40 @@ export const ErrorFallbackProps = z.object({
   raw: z.string().max(4000).optional(),
 });
 
+export const PrCardProps = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1).max(256),
+  author: githubLogin.optional(),
+  state: z.enum(['open', 'draft', 'merged', 'closed']),
+  ci: z.enum(['success', 'failure', 'pending', 'none']).default('none'),
+  reviewers: z.array(githubLogin).max(10).default([]),
+  labels: z.array(z.string().max(50)).max(10).default([]),
+  ageDays: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+  // Links only to github.com over https.
+  url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+});
+
+export const PrListProps = z.object({
+  title: z.string().max(80).optional(),
+  items: z.array(PrCardProps).max(50),
+  emptyText: z.string().max(80).default('No pull requests match.'),
+});
+
+export const StepTimelineProps = z.object({
+  steps: z
+    .array(
+      z.object({
+        id: z.string().max(64),
+        label: z.string().max(120),
+        status: z.enum(['pending', 'running', 'done', 'error']),
+        detail: z.string().max(200).optional(),
+      }),
+    )
+    .max(30),
+});
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -126,6 +161,8 @@ export interface CatalogEntry {
   /** Told to the model: when to use this component. */
   description: string;
   props: z.ZodType;
+  /** Rendered by the client only; never offered to the model. */
+  internal?: boolean;
   /** Events the component can send back to the agent. */
   events: readonly string[];
 }
@@ -167,9 +204,29 @@ export const catalog = {
     props: ContributorListProps,
     events: [],
   },
+  PrCard: {
+    group: 'data',
+    description: 'One pull request with state, CI status, reviewers, age and size.',
+    props: PrCardProps,
+    events: ['open'],
+  },
+  PrList: {
+    group: 'data',
+    description: 'A list of pull requests (PrCard props in items).',
+    props: PrListProps,
+    events: ['open'],
+  },
+  StepTimeline: {
+    group: 'agentic',
+    description: 'Progress of a multi-step task, rendered by the client from run events.',
+    internal: true,
+    props: StepTimelineProps,
+    events: [],
+  },
   ErrorFallback: {
     group: 'safety',
-    description: 'Shown by the client when a node is invalid. Do not emit it yourself.',
+    description: 'Shown by the client when a node is invalid.',
+    internal: true,
     props: ErrorFallbackProps,
     events: ['retry'],
   },

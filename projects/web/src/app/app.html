@@ -10,7 +10,14 @@
       <span class="grid size-7 place-items-center rounded-lg bg-accent text-sm text-white" aria-hidden="true">R</span>
       <h1>RepoPilot</h1>
     </a>
-    <nav aria-label="Main">
+    <nav aria-label="Main" class="flex gap-1">
+      <a
+        routerLink="/"
+        routerLinkActive="text-ink bg-canvas"
+        [routerLinkActiveOptions]="{ exact: true }"
+        class="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-ink"
+        >Chat</a
+      >
       <a
         routerLink="/playground"
         routerLinkActive="text-ink bg-canvas"

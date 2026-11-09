@@ -4,6 +4,7 @@
  * only status codes and non-secret facts. Never prints a key or token.
  */
 import { config } from './config';
+import { resolveModel } from './llm/ollama';
 
 type Result = { name: string; ok: boolean; detail: string };
 const results: Result[] = [];
@@ -61,13 +62,11 @@ async function checkClaude() {
 
 async function checkOllama() {
   try {
-    const res = await fetch(new URL('/api/tags', config.OLLAMA_URL), { signal: AbortSignal.timeout(2000) });
-    const { models = [] } = (await res.json()) as { models?: { name: string }[] };
-    const names = models.map((m) => m.name);
-    const has = names.some((n) => n.startsWith(config.OLLAMA_MODEL));
-    report('Ollama', has, has ? `${config.OLLAMA_MODEL} available` : `running, but no "${config.OLLAMA_MODEL}" model. Run: ollama pull ${config.OLLAMA_MODEL}`);
-  } catch {
-    report('Ollama', false, `not reachable at ${config.OLLAMA_URL} (optional; needed only for the local model)`);
+    // Same resolution the provider uses, so "available" here means it will work there.
+    const model = await resolveModel(config.OLLAMA_URL, config.OLLAMA_MODEL);
+    report('Ollama', true, `${config.OLLAMA_MODEL} -> ${model}`);
+  } catch (err) {
+    report('Ollama', false, `${(err as Error).message} (optional; needed only for the local model)`);
   }
 }
 

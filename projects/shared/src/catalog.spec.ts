@@ -94,7 +94,7 @@ describe('buildCatalogPromptDoc', () => {
   const doc = buildCatalogPromptDoc();
 
   it('lists every component the agent may emit', () => {
-    for (const name of componentNames.filter((n) => n !== 'ErrorFallback')) {
+    for (const name of componentNames.filter((n) => n !== 'ErrorFallback' && n !== 'StepTimeline')) {
       expect(doc).toContain(`### ${name}`);
     }
   });

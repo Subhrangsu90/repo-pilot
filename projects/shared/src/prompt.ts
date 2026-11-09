@@ -13,7 +13,7 @@ import { catalog, CatalogEntry, componentNames } from './catalog';
  */
 export function buildCatalogPromptDoc(): string {
   const entries = componentNames
-    .filter((name) => catalog[name].group !== 'safety')
+    .filter((name) => !(catalog[name] as CatalogEntry).internal)
     .map((name) => {
       const entry: CatalogEntry = catalog[name];
       const schema = JSON.stringify(z.toJSONSchema(entry.props, { io: 'input' }));

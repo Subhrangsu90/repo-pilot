@@ -5,6 +5,7 @@ import {
   invalidProps,
   issuePicker,
   partiallyBroken,
+  prList,
   UiEvent,
   unknownComponent,
 } from '@repopilot/shared';
@@ -66,6 +67,18 @@ describe('GenUiHost', () => {
     await fixture.whenStable();
     expect(el.querySelector('app-error-fallback')).toBeNull();
     expect(el.querySelector('app-stat-card')?.textContent).toContain('3');
+  });
+
+  it('renders a PrList with state, CI and a safe link', async () => {
+    const { el } = await render(prList);
+    const cards = el.querySelectorAll('app-pr-card');
+    expect(cards.length).toBe(3);
+    expect(cards[0].textContent).toContain('CI passing');
+    expect(cards[1].textContent).toContain('Draft');
+    expect(cards[2].textContent).toContain('CI failing');
+    const link = cards[0].querySelector('a');
+    expect(link?.getAttribute('href')).toBe('https://github.com/octocat/repopilot-demo/pull/15');
+    expect(link?.getAttribute('rel')).toContain('noopener');
   });
 
   it('sends selection events from a nested IssueTable back through emit', async () => {
