@@ -38,7 +38,7 @@ export function createProvider(config: Config, onFallback?: (error: LlmError) =>
       return withFallback(primary, createGemini(config.GEMINI_API_KEY, config.GEMINI_FALLBACK_MODEL), onFallback);
     }
     case 'ollama':
-      return createOllama(config.OLLAMA_URL, config.OLLAMA_MODEL);
+      return createOllama(config.OLLAMA_URL, config.OLLAMA_MODEL, config.OLLAMA_NUM_CTX);
     case 'claude':
       // Added once an ANTHROPIC_API_KEY is available to test against.
       throw new LlmError('The Claude provider is not implemented yet; use gemini or ollama.', false);

@@ -4,7 +4,12 @@ import { ChatMessage, LlmError, LlmProvider, LlmReply, LlmRequest, toLlmError, w
  * Local model (Gemma) through Ollama's chat API with tool calling. Nothing
  * leaves the machine: the privacy and cost side of the model switch.
  */
-export function createOllama(baseUrl: string, configured: string, timeoutMs = 180_000): LlmProvider {
+/**
+ * `numCtx` caps the context window. Ollama otherwise picks its own default, and
+ * the KV cache it reserves can exceed free RAM on a laptop. RepoPilot's prompt
+ * is ~3k tokens plus tool results, so 8k is plenty.
+ */
+export function createOllama(baseUrl: string, configured: string, numCtx = 8192, timeoutMs = 180_000): LlmProvider {
   let resolved: Promise<string> | undefined;
   return {
     name: 'ollama',
@@ -23,7 +28,7 @@ export function createOllama(baseUrl: string, configured: string, timeoutMs = 18
           body: JSON.stringify({
             model,
             stream: false,
-            options: { temperature: 0.2 },
+            options: { temperature: 0.2, num_ctx: numCtx },
             messages: [{ role: 'system', content: request.system }, ...toMessages(request.messages)],
             tools: request.tools.map((t) => ({
               type: 'function',
@@ -37,8 +42,8 @@ export function createOllama(baseUrl: string, configured: string, timeoutMs = 18
       }
 
       if (!res.ok) {
-        const text = (await res.text()).slice(0, 200);
-        throw new LlmError(`ollama/${model}: HTTP ${res.status} ${text}`, false, res.status);
+        const text = await res.text();
+        throw new LlmError(describeFailure(model, res.status, text), false, res.status);
       }
 
       const json = (await res.json()) as {
@@ -84,6 +89,17 @@ function toMessages(messages: ChatMessage[]): OllamaMessage[] {
         return m.results.map((r) => ({ role: 'tool', tool_name: r.name, content: JSON.stringify(r.content) }));
     }
   });
+}
+
+/** Turns llama.cpp load failures (bad_alloc, failed to allocate buffer) into advice a user can act on. */
+export function describeFailure(model: string, status: number, body: string): string {
+  if (/bad_alloc|failed to allocate|out of memory|llama-server process has terminated/i.test(body)) {
+    return (
+      `ollama/${model}: not enough free memory to load the model. Close memory-heavy apps (VS Code, browsers), ` +
+      `lower OLLAMA_NUM_CTX, pick a smaller OLLAMA_MODEL, or switch to LLM_PROVIDER=gemini.`
+    );
+  }
+  return `ollama/${model}: HTTP ${status} ${body.slice(0, 200)}`;
 }
 
 /** Ollama needs the exact tag; accept a bare name ("gemma4") and pick the installed tag ("gemma4:e2b"). */

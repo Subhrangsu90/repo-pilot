@@ -148,6 +148,15 @@ describe('runAgent', () => {
     await expect(run('Show my open PRs')).rejects.toThrow('429');
   });
 
+  it('treats null optional arguments from small models as absent', async () => {
+    let received: unknown;
+    const spy: Executor<any> = async (input) => ((received = input), { data: {} });
+    const model = scripted({ toolCalls: [{ id: 'c1', name: 'list_pull_requests', args: { repo: null, limit: null, state: 'open' } }] });
+    const { run } = setup(model, { executors: { list_pull_requests: spy } });
+    await run('Show my open PRs');
+    expect(received).toEqual({ state: 'open', limit: 20 });
+  });
+
   it('stops after the iteration limit', async () => {
     const loop = { toolCalls: [{ id: 'c', name: 'list_pull_requests', args: {} }] };
     const { events, run } = setup(scripted(loop, loop, loop, loop), { maxIterations: 3 });

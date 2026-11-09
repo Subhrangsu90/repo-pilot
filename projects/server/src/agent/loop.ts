@@ -84,7 +84,7 @@ async function runTool(call: { id: string; name: string; args: unknown }, deps: 
   if (!spec || !deps.executors[spec.name]) return fail(`Unknown tool "${call.name}".`);
   if (needsApproval(spec.name)) return fail(`"${spec.name}" changes the repository and needs user approval, which is not available yet.`);
 
-  const parsed = spec.input.safeParse(call.args);
+  const parsed = spec.input.safeParse(dropNulls(call.args));
   if (!parsed.success) return fail(`Invalid input for ${spec.name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`);
 
   try {
@@ -106,6 +106,23 @@ function emitText(emit: AgentDeps['emit'], messageId: string, text: string) {
   emit({ type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' });
   emit({ type: 'TEXT_MESSAGE_CONTENT', messageId, delta: text });
   emit({ type: 'TEXT_MESSAGE_END', messageId });
+}
+
+/**
+ * Small models often send `null` for optional fields they do not want to set.
+ * Treat that as "not provided" so schema defaults apply, instead of failing
+ * validation and burning an iteration.
+ */
+export function dropNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(dropNulls);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== null)
+        .map(([k, v]) => [k, dropNulls(v)]),
+    );
+  }
+  return value;
 }
 
 function cap(data: unknown): unknown {
