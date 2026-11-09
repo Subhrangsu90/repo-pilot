@@ -1,0 +1,22 @@
+{
+  "name": "@repopilot/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "RepoPilot agent server: model loop, GitHub tools, approval gate, AG-UI event stream.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@repopilot/shared": "*",
+    "fastify": "^5.6.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.2"
+  }
+}

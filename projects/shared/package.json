@@ -1,0 +1,22 @@
+{
+  "name": "@repopilot/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract shared by the Angular app and the agent server: component catalog, UI node validation, fixtures.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./prompt": "./src/prompt.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.8"
+  }
+}

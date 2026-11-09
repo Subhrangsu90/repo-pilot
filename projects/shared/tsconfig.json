@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/**/*.ts"]
+}

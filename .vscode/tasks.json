@@ -3,8 +3,9 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "dev:web",
       "type": "npm",
-      "script": "start",
+      "script": "dev:web",
       "isBackground": true,
       "problemMatcher": {
         "owner": "typescript",
@@ -21,22 +22,17 @@
       }
     },
     {
+      "label": "dev:server",
+      "type": "npm",
+      "script": "dev:server",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "test",
       "type": "npm",
       "script": "test",
-      "isBackground": true,
-      "problemMatcher": {
-        "owner": "typescript",
-        "pattern": "$tsc",
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": {
-            "regexp": "Changes detected"
-          },
-          "endsPattern": {
-            "regexp": "bundle generation (complete|failed)"
-          }
-        }
-      }
+      "problemMatcher": []
     }
   ]
 }

@@ -1,0 +1,21 @@
+{
+  "name": "repopilot",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "npm@11.6.4",
+  "workspaces": [
+    "projects/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run start -w @repopilot/web",
+    "dev:server": "npm run dev -w @repopilot/server",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "format": "prettier --write \"projects/**/*.{ts,html,css,json}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "typescript": "~6.0.2"
+  }
+}
