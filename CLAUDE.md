@@ -17,6 +17,19 @@ through a `paths` entry in `projects/web/tsconfig.json`; the server runs it thro
 
 Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 
+## Demo repository (`Subhrangsu90/repopilot-demo`)
+
+- `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude and
+  the GitHub token/permissions. Prints status only, never secrets.
+- `npm run seed:demo -w @repopilot/server [-- --yes]` – seeds the demo repo from
+  `projects/server/src/seed-demo-content.ts`. Dry run without `--yes`. Idempotent: once the
+  `v1.0.0` release exists it only creates missing files and never replays history over later
+  commits. Content is planted for the demo: #8 is a prompt-injection issue (must be treated as
+  data), PR #15 has 3 deliberate review bugs (unnormalised rate-limit key, `>` off-by-one,
+  password logged), PR #14 is merged (undo demo), #16 draft, #17 open.
+- Known limitation: the Contents API ignores commit dates, so all commits are dated 2026-11-09;
+  backdating would need a Git Data API rewrite + force-push of `main` (user declined for now).
+
 ## Decisions (agreed 2026-11-10)
 
 - npm workspaces, not Nx. All workspaces live under `projects/` (user's choice over
