@@ -12,6 +12,7 @@ export interface Overview {
   repo: string;
   openPullRequests: number | null;
   openIssues: number | null;
+  latestRelease: string | null;
   rateLimit: { limit: number; remaining: number } | null;
   viewer: { login: string; avatarUrl: string };
 }

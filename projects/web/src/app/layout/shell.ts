@@ -5,6 +5,8 @@ import type { ModelOption } from '@repopilot/shared';
 import { filter, map } from 'rxjs';
 import { ModelChoice } from '../core/model-choice';
 import { ServerStatus } from '../core/server-status';
+import { REGISTRY } from '../genui/registry';
+import { GENUI_REGISTRY } from '../genui/registry-token';
 import { Theme } from '../core/theme';
 import { Icon, IconName } from '../shared/ui/icon';
 import { Logo } from '../shared/ui/logo';
@@ -24,9 +26,9 @@ interface NavItem {
  */
 const NAV: NavItem[] = [
   { label: 'Ask', icon: 'ask', path: '/ask' },
-  { label: 'Pull requests', icon: 'pull-request', count: 'pulls' },
+  { label: 'Pull requests', icon: 'pull-request', path: '/pulls', count: 'pulls' },
   { label: 'Issues', icon: 'issue', count: 'issues' },
-  { label: 'Releases', icon: 'release' },
+  { label: 'Releases', icon: 'release', path: '/releases' },
   { label: 'History', icon: 'history' },
   { label: 'Audit log', icon: 'audit' },
 ];
@@ -44,6 +46,8 @@ const MODELS: { value: ModelOption; label: string }[] = [
 @Component({
   selector: 'app-shell',
   imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, Logo],
+  // The component catalog loads with the app pages, not with the landing page.
+  providers: [{ provide: GENUI_REGISTRY, useValue: REGISTRY }],
   host: { class: 'flex min-h-dvh flex-col min-[780px]:flex-row' },
   template: `
     <nav
@@ -69,10 +73,13 @@ const MODELS: { value: ModelOption; label: string }[] = [
                 [routerLink]="item.path"
                 routerLinkActive="bg-surface-3 font-medium text-fg"
                 ariaCurrentWhenActive="page"
-                class="flex min-h-11 items-center gap-2.5 rounded-sm px-3 text-body-md text-fg-muted hover:text-fg"
+                class="group flex min-h-11 items-center gap-2.5 rounded-sm px-3 text-body-md text-fg-muted hover:text-fg"
               >
                 <app-icon [name]="item.icon" />
                 {{ item.label }}
+                @if (count !== null) {
+                  <span class="ml-auto text-caption text-fg-faint tabular-nums group-aria-[current=page]:text-fg-muted"><span class="sr-only">, </span>{{ count }}<span class="sr-only"> open</span></span>
+                }
               </a>
             } @else {
               <span

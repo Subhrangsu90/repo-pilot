@@ -118,8 +118,8 @@ describe('buildCatalogPromptDoc', () => {
     }
   });
 
-  it('does not offer app-only components to the model (ErrorFallback, StepTimeline, ApprovalCard)', () => {
-    expect(componentNames.filter(isInternal)).toEqual(['ApprovalCard', 'StepTimeline', 'ErrorFallback']);
+  it('does not offer app-only components to the model (approval surfaces, diffs, steps, errors)', () => {
+    expect(componentNames.filter(isInternal)).toEqual(['ApprovalCard', 'DiffViewer', 'PrReview', 'ReleaseForm', 'StepTimeline', 'ErrorFallback']);
     for (const name of componentNames.filter(isInternal)) expect(doc).not.toContain(`### ${name}`);
   });
 

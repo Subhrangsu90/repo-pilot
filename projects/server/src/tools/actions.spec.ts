@@ -1,6 +1,6 @@
 import { validateNode } from '@repopilot/shared';
 import { GitHubError } from '../github/client';
-import { bulkUpdateIssuesTool } from './actions';
+import { bulkUpdateIssuesTool, type CardDraft } from './actions';
 import type { ToolContext } from './read-tools';
 
 const old = new Date(Date.now() - 120 * 86_400_000).toISOString();
@@ -40,10 +40,11 @@ describe('bulk_update_issues', () => {
     const plan = await bulkUpdateIssuesTool.plan(input([118, 124, 131, 140, 999, 118]), ctx);
 
     expect(patches).toEqual([]);
-    if (plan.kind !== 'card') throw new Error('expected a card');
+    if (plan.kind !== 'card' || (plan.component ?? 'ApprovalCard') !== 'ApprovalCard') throw new Error('expected an ApprovalCard');
+    const card = plan.card as CardDraft;
     expect(plan.ids).toEqual([118, 124]);
-    expect(plan.card.items[0]).toEqual({ id: 118, title: 'Support IE11', meta: 'wontfix · 120 days' });
-    expect(plan.card.skipped).toEqual([
+    expect(card.items[0]).toEqual({ id: 118, title: 'Support IE11', meta: 'wontfix · 120 days' });
+    expect(card.skipped).toEqual([
       { id: 131, reason: 'already closed' },
       { id: 140, reason: 'is a pull request' },
       { id: 999, reason: 'not found' },
@@ -66,7 +67,7 @@ describe('bulk_update_issues', () => {
 
   it('closes exactly the given ids as not planned and reports partial failure', async () => {
     const { ctx, patches } = fakeCtx();
-    const out = await bulkUpdateIssuesTool.execute(input([118, 124]), [118, 124], ctx);
+    const out = await bulkUpdateIssuesTool.execute(input([118, 124]), [118, 124], ctx, {});
 
     expect(patches).toEqual([{ path: '/repos/octo/demo/issues/118', body: { state: 'closed', state_reason: 'not_planned' } }]);
     expect(out.ok).toBe(false);
@@ -76,7 +77,7 @@ describe('bulk_update_issues', () => {
 
   it('reopens', async () => {
     const { ctx, patches } = fakeCtx();
-    const out = await bulkUpdateIssuesTool.execute(input([131], 'reopen'), [131], ctx);
+    const out = await bulkUpdateIssuesTool.execute(input([131], 'reopen'), [131], ctx, {});
     expect(patches[0].body).toEqual({ state: 'open' });
     expect(out).toMatchObject({ ok: true, result: 'Reopened 1 issue.' });
   });

@@ -8,11 +8,13 @@ import { buildSystemPrompt, buildToolDefs } from './agent/prompt';
 import { findPendingByRun, getThread, isTerminal, startRun, subscribe, ThreadBusyError } from './agent/runs';
 import { GitHub } from './github/client';
 import { createProvider } from './llm';
+import { fetchPullRequest } from './github/pulls';
 import { actions } from './tools/actions';
-import { executors } from './tools/read-tools';
+import { executors, resolveRepo, runListPullRequests, type ToolContext } from './tools/read-tools';
 
 const app = Fastify({ logger: { level: 'info' } });
 const github = new GitHub(config.GITHUB_TOKEN ?? '');
+const toolCtx: ToolContext = { github, allowlist: config.GITHUB_REPO_ALLOWLIST };
 const toolDefs = buildToolDefs();
 
 /** Liveness plus a quick view of what is configured (never the secrets). */
@@ -36,6 +38,7 @@ query ($owner: String!, $name: String!) {
   viewer { login avatarUrl(size: 64) }
   rateLimit { limit remaining }
   repository(owner: $owner, name: $name) {
+    latestRelease { tagName }
     pullRequests(states: OPEN) { totalCount }
     issues(states: OPEN) { totalCount }
   }
@@ -44,7 +47,7 @@ query ($owner: String!, $name: String!) {
 interface OverviewData {
   viewer: { login: string; avatarUrl: string };
   rateLimit: { limit: number; remaining: number } | null;
-  repository: { pullRequests: { totalCount: number }; issues: { totalCount: number } } | null;
+  repository: { latestRelease: { tagName: string } | null; pullRequests: { totalCount: number }; issues: { totalCount: number } } | null;
 }
 
 /**
@@ -62,11 +65,39 @@ app.get('/api/overview', async (req, reply) => {
       repo: full,
       openPullRequests: d.repository?.pullRequests.totalCount ?? null,
       openIssues: d.repository?.issues.totalCount ?? null,
+      latestRelease: d.repository?.latestRelease?.tagName ?? null,
       rateLimit: d.rateLimit,
       viewer: d.viewer,
     };
   } catch (err) {
     req.log.warn({ err: (err as Error).message }, 'overview failed');
+    return reply.code(502).send({ error: 'GitHub did not answer.' });
+  }
+});
+
+/** The Pull requests page: open PRs of the default repo, as PrCard props. */
+app.get('/api/pulls', async (req, reply) => {
+  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  try {
+    const out = await runListPullRequests({ state: 'open', limit: 50 }, toolCtx);
+    return { repo: config.GITHUB_REPO_ALLOWLIST[0], items: (out.ui?.props as { items: unknown[] }).items };
+  } catch (err) {
+    req.log.warn({ err: (err as Error).message }, 'pull list failed');
+    return reply.code(502).send({ error: 'GitHub did not answer.' });
+  }
+});
+
+/** The PR review page header: one pull request without its diff. */
+app.get<{ Params: { number: string } }>('/api/pulls/:number', async (req, reply) => {
+  const number = Number(req.params.number);
+  if (!Number.isInteger(number) || number < 1) return reply.code(400).send({ error: 'Not a pull request number.' });
+  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  try {
+    const pr = await fetchPullRequest(toolCtx, resolveRepo(undefined, toolCtx), number, { files: false });
+    if (!pr) return reply.code(404).send({ error: `Pull request #${number} was not found.` });
+    return pr.info;
+  } catch (err) {
+    req.log.warn({ err: (err as Error).message }, 'pull request failed');
     return reply.code(502).send({ error: 'GitHub did not answer.' });
   }
 });
@@ -94,7 +125,7 @@ function agentDeps(model: ModelOption | undefined, emit: (e: AgentEvent) => void
     tools: toolDefs,
     executors,
     actions,
-    ctx: { github, allowlist: config.GITHUB_REPO_ALLOWLIST },
+    ctx: toolCtx,
     emit,
     runId: run.id,
     signal: run.signal,
@@ -138,6 +169,8 @@ const ActionBody = z.object({
   toolCallId: z.string().min(1).max(100),
   decision: z.enum(['approve', 'reject']),
   selected: z.array(z.number().int().positive()).max(100).optional(),
+  // Shape-checked by the tool's own schema in the loop; only the size is limited here.
+  edits: z.unknown().refine((v) => v === undefined || JSON.stringify(v).length <= 40_000, 'edits too large').optional(),
 });
 
 /**
@@ -152,14 +185,14 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
   if (!parsed.success) {
     return reply.code(400).send({ error: "Send { toolCallId: string, decision: 'approve' | 'reject', selected?: number[] }." });
   }
-  const { toolCallId, decision, selected } = parsed.data;
+  const { toolCallId, decision, selected, edits } = parsed.data;
   const thread = findPendingByRun(req.params.id);
   const pending = thread?.pending;
   if (!thread || !pending || pending.callId !== toolCallId) {
     return reply.code(404).send({ error: 'No approval is waiting for this run. It may have been answered already.' });
   }
   const approve = decision === 'approve';
-  if (approve && pending.ids.length > 0 && !(selected ?? pending.ids).some((id) => pending.ids.includes(id))) {
+  if (approve && !pending.allowEmpty && pending.ids.length > 0 && !(selected ?? pending.ids).some((id) => pending.ids.includes(id))) {
     return reply.code(400).send({ error: 'Select at least one item to approve.' });
   }
 
@@ -167,7 +200,7 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
   try {
     const started = startRun(thread.id, async (t, emit, run) => {
       const followups = trackFollowups(emit);
-      const outcome = await resumeAgent(t.messages, pending, { approve, selected }, agentDeps(t.model, followups.emit, run));
+      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(t.model, followups.emit, run));
       if (outcome.status === 'awaiting-approval') t.pending = outcome.pending;
       else followups.finish();
     });

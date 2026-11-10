@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
-import type { AgentEvent, ApprovalAction, StartRunRequest, StartRunResponse, UiEvent } from '@repopilot/shared';
+import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent } from '@repopilot/shared';
 import { firstValueFrom } from 'rxjs';
 import { applyEvent, newTurn, Turn } from './agent-run';
 import { ModelChoice } from './model-choice';
@@ -18,6 +18,8 @@ export class AgentSession {
   private readonly model = inject(ModelChoice);
   private threadId: string | undefined;
   private source: EventSource | undefined;
+  /** A prompt to send as soon as the current run finishes. */
+  private queued: string | undefined;
 
   readonly turns = signal<Turn[]>([]);
   readonly isBusy = computed(() => this.turns().at(-1)?.status === 'running');
@@ -57,7 +59,7 @@ export class AgentSession {
    * - ErrorFallback retry asks the agent again, saying what went wrong.
    */
   readonly handleUiEvent = (event: UiEvent): void => {
-    const payload = (event.payload ?? {}) as { toolCallId?: unknown; selected?: unknown; message?: unknown };
+    const payload = (event.payload ?? {}) as { toolCallId?: unknown; selected?: unknown; message?: unknown; edits?: unknown; changed?: unknown };
 
     if (event.component === 'ErrorFallback' && event.name === 'retry') {
       const reason = typeof payload.message === 'string' ? payload.message.slice(0, 300) : 'it failed validation';
@@ -65,12 +67,16 @@ export class AgentSession {
       return;
     }
 
-    if (event.component !== 'ApprovalCard' || typeof payload.toolCallId !== 'string') return;
+    // The approval surfaces: ApprovalCard and PrReview (a review the user submits or discards).
+    const gate = event.component === 'ApprovalCard' || event.component === 'PrReview' || event.component === 'ReleaseForm';
+    if (!gate || typeof payload.toolCallId !== 'string') return;
     if (event.name === 'edit') {
       void this.editRequest(payload.toolCallId);
+    } else if (event.name === 'rewrite') {
+      void this.rewrite(payload.toolCallId, payload.edits, payload.changed);
     } else if (event.name === 'approve' || event.name === 'reject') {
       const selected = Array.isArray(payload.selected) ? payload.selected.filter((n): n is number => Number.isInteger(n)) : undefined;
-      void this.decide(payload.toolCallId, event.name, selected);
+      void this.decide(payload.toolCallId, event.name, selected, payload.edits);
     }
   };
 
@@ -84,8 +90,17 @@ export class AgentSession {
     }
   }
 
+  /**
+   * "Ask agent to rewrite" on a ReleaseForm: discard this draft, then ask for a new
+   * one that keeps exactly the values the user set. Sent once the discard run ends.
+   */
+  async rewrite(toolCallId: string, edits: unknown, changed: unknown): Promise<void> {
+    const prompt = rewritePrompt(edits, Array.isArray(changed) ? changed.filter((c): c is string => typeof c === 'string') : []);
+    if (await this.decide(toolCallId, 'reject')) this.queued = prompt;
+  }
+
   /** Sends the decision on a paused run. Resolves true when the server accepted it. */
-  async decide(toolCallId: string, decision: ApprovalAction['decision'], selected?: number[]): Promise<boolean> {
+  async decide(toolCallId: string, decision: ApprovalAction['decision'], selected?: number[], edits?: unknown): Promise<boolean> {
     // Only a card the server actually paused on can be answered.
     const turn = this.turns().find((t) => t.status === 'awaiting-approval' && t.pending?.toolCallId === toolCallId);
     if (!turn?.pending) return false;
@@ -93,7 +108,12 @@ export class AgentSession {
     this.patch(turn.id, { actionError: undefined });
 
     try {
-      const body: ApprovalAction = { toolCallId, decision, ...(decision === 'approve' && selected ? { selected } : {}) };
+      const body: ApprovalAction = {
+        toolCallId,
+        decision,
+        ...(decision === 'approve' && selected ? { selected } : {}),
+        ...(decision === 'approve' && edits !== undefined ? { edits } : {}),
+      };
       const next = await firstValueFrom(this.http.post<StartRunResponse>(`/api/runs/${encodeURIComponent(runId)}/actions`, body));
       this.patch(turn.id, { status: 'running', pending: undefined });
       this.listen(turn.id, next.runId);
@@ -122,6 +142,7 @@ export class AgentSession {
 
   /** Start a fresh conversation. */
   reset(): void {
+    this.queued = undefined;
     this.source?.close();
     this.source = undefined;
     this.threadId = undefined;
@@ -141,7 +162,12 @@ export class AgentSession {
         return;
       }
       this.update(turnId, event);
-      if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') source.close();
+      if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
+        source.close();
+        const next = this.queued;
+        this.queued = undefined;
+        if (next && event.type === 'RUN_FINISHED') void this.send(next);
+      }
     };
 
     source.onerror = () => {
@@ -159,6 +185,23 @@ export class AgentSession {
   private patch(turnId: string, changes: Partial<Turn>) {
     this.turns.update((list) => list.map((t) => (t.id === turnId ? { ...t, ...changes } : t)));
   }
+}
+
+/** The rewrite request for a release draft, listing the values the user set so the agent keeps them. */
+export function rewritePrompt(edits: unknown, changed: string[]): string {
+  const parsed = ReleaseEdits.safeParse(edits);
+  if (!parsed.success || changed.length === 0) return 'Rewrite the release draft with clearer wording.';
+  const e = parsed.data;
+  const notes = (key: keyof ReleaseEdits['sections']) =>
+    e.sections[key].map((x) => `${x.text}${x.pr ? ` (#${x.pr})` : ''}`).join('; ') || 'none';
+  const keep: string[] = [];
+  if (changed.includes('tag')) keep.push(`tag ${e.tag}`);
+  if (changed.includes('name')) keep.push(`name "${e.name}"`);
+  if (changed.includes('prerelease')) keep.push(e.prerelease ? 'a pre-release' : 'not a pre-release');
+  if (changed.includes('features')) keep.push(`features: ${notes('features')}`);
+  if (changed.includes('fixes')) keep.push(`fixes: ${notes('fixes')}`);
+  if (changed.includes('breaking')) keep.push(`breaking changes: ${notes('breaking')}`);
+  return `Rewrite the release draft for ${e.tag}. Keep exactly what I set: ${keep.join('; ')}.`.slice(0, 2000);
 }
 
 function errorMessage(err: unknown): string {

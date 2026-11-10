@@ -93,4 +93,6 @@ export interface ApprovalAction {
   decision: 'approve' | 'reject';
   /** Approve only: the item ids still ticked. Ids that were not in the dry run are ignored. */
   selected?: number[];
+  /** Approve only: what the user changed in the surface (e.g. PrReviewEdits), checked by the tool's own schema. */
+  edits?: unknown;
 }

@@ -18,7 +18,9 @@ export interface AgentDeps {
   signal?: AbortSignal;
 }
 
-type CardProps = PropsOf<'ApprovalCard'>;
+/** The surfaces a paused change can show; both carry status / selected / result. */
+type GateComponent = 'ApprovalCard' | 'PrReview' | 'ReleaseForm';
+type CardProps = Record<string, unknown> & Pick<PropsOf<'ApprovalCard'>, 'status' | 'selected' | 'result'>;
 
 /** A tool call waiting for the user. Kept on the thread until POST /actions answers it. */
 export interface PendingApproval {
@@ -29,7 +31,12 @@ export interface PendingApproval {
   input: unknown;
   /** Item ids from the dry run: an approval may only pick from these. */
   ids: number[];
+  /** True when approving with nothing ticked is still a change (e.g. a review without inline comments). */
+  allowEmpty: boolean;
+  /** Server-only facts from the dry run, handed to `execute`. */
+  carry?: unknown;
   surfaceId: string;
+  component: GateComponent;
   card: CardProps;
   /** Results for every call of the paused model turn; this call's slot is filled on resume. */
   results: ToolResult[];
@@ -41,6 +48,8 @@ export interface Decision {
   approve: boolean;
   /** Ids still ticked; anything outside the dry run is ignored. */
   selected?: number[];
+  /** What the user changed in the surface; checked against the tool's own `edits` schema. */
+  edits?: unknown;
 }
 
 /** What the model sees back from a tool, capped so one big result cannot flood the context. */
@@ -211,14 +220,27 @@ async function prepareApproval(call: ToolCall, deps: AgentDeps): Promise<Prepare
   }
 
   const surfaceId = `${deps.runId}-${call.id}`;
+  const component: GateComponent = plan.component ?? 'ApprovalCard';
   const card: CardProps = { ...plan.card, toolCallId: call.id, tool: spec.name, risk, status: 'pending', selected: plan.ids };
-  const shown = showCard(deps, surfaceId, card);
+  const shown = showCard(deps, surfaceId, component, card);
   if (shown) return fail(`Could not build the approval card: ${shown}`);
 
   emit({ type: 'STEP_FINISHED', stepId, status: 'done', detail: plan.detail });
   return {
     kind: 'pending',
-    pending: { runId: deps.runId, callId: call.id, tool: spec.name, input: parsed.data, ids: plan.ids, surfaceId, card, results: [] },
+    pending: {
+      runId: deps.runId,
+      callId: call.id,
+      tool: spec.name,
+      input: parsed.data,
+      ids: plan.ids,
+      allowEmpty: plan.allowEmpty ?? false,
+      carry: plan.carry,
+      surfaceId,
+      component,
+      card,
+      results: [],
+    },
   };
 }
 
@@ -227,15 +249,31 @@ async function carryOut(pending: PendingApproval, decision: Decision, deps: Agen
   const { emit } = deps;
   // Step id the client added when the run paused ("Waiting for your approval").
   const waitId = `approval-${pending.callId}`;
-  const update = (patch: Partial<CardProps>) => showCard(deps, pending.surfaceId, { ...pending.card, ...patch });
+  let shownCard = pending.card;
+  const update = (patch: Partial<CardProps>) => showCard(deps, pending.surfaceId, pending.component, { ...shownCard, ...patch });
 
   const allowed = new Set(pending.ids);
   const ids = [...new Set(decision.selected ?? pending.ids)].filter((id) => allowed.has(id));
+  const action = deps.actions[pending.tool];
 
-  if (!decision.approve || (pending.ids.length > 0 && ids.length === 0)) {
+  if (!decision.approve || (!pending.allowEmpty && pending.ids.length > 0 && ids.length === 0)) {
     update({ status: 'rejected', result: 'Rejected. Nothing was changed.' });
     emit({ type: 'STEP_FINISHED', stepId: waitId, status: 'done', detail: 'Rejected' });
     return { rejected: true, message: 'The user rejected this change. Nothing was changed.' };
+  }
+
+  // Edits only count when the tool declares what may be edited, and only in that shape.
+  let edits: unknown;
+  if (action?.edits && decision.edits !== undefined) {
+    const parsed = action.edits.safeParse(decision.edits);
+    if (!parsed.success) {
+      const message = `Your changes could not be used (${parsed.error.issues[0]?.message ?? 'invalid'}). Nothing was changed.`;
+      update({ status: 'failed', result: message.slice(0, 400) });
+      emit({ type: 'STEP_FINISHED', stepId: waitId, status: 'error', detail: 'Invalid edits' });
+      return { error: message };
+    }
+    edits = parsed.data;
+    if (action.editedCard) shownCard = { ...shownCard, ...action.editedCard(shownCard, edits) };
   }
 
   emit({ type: 'STEP_FINISHED', stepId: waitId, status: 'done', detail: `Approved ${ids.length}` });
@@ -245,9 +283,9 @@ async function carryOut(pending: PendingApproval, decision: Decision, deps: Agen
   const stepId = `${deps.runId}-exec-${pending.callId}`;
   emit({ type: 'STEP_STARTED', stepId, stepName: spec?.label ?? pending.tool });
   try {
-    const action = deps.actions[pending.tool];
     if (!action) throw new ToolError(`Unknown tool "${pending.tool}".`);
-    const out = await action.execute(pending.input, ids, deps.ctx);
+    const out = await action.execute(pending.input, ids, deps.ctx, { edits, carry: pending.carry });
+    shownCard = { ...shownCard, ...out.patch };
     update({ status: out.ok ? 'approved' : 'failed', selected: ids, result: out.result });
     emit({ type: 'STEP_FINISHED', stepId, status: out.ok ? 'done' : 'error', detail: out.detail });
     const deselected = pending.ids.filter((id) => !ids.includes(id));
@@ -260,9 +298,9 @@ async function carryOut(pending: PendingApproval, decision: Decision, deps: Agen
   }
 }
 
-/** Streams an ApprovalCard (validated like any other node). Returns an error message, or null. */
-function showCard(deps: AgentDeps, surfaceId: string, props: CardProps): string | null {
-  const node = { component: 'ApprovalCard', props };
+/** Streams the gate surface (validated like any other node). Returns an error message, or null. */
+function showCard(deps: AgentDeps, surfaceId: string, component: GateComponent, props: CardProps): string | null {
+  const node = { component, props };
   const check = validateNode(node);
   if (!check.ok) return check.error;
   deps.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId, node } });

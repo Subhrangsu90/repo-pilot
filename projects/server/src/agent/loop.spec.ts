@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@repopilot/shared';
+import * as z from 'zod';
 import type { ChatMessage, LlmProvider, LlmReply, LlmRequest } from '../llm';
 import { LlmError, withFallback } from '../llm';
 import { resumeAgent, runAgent, type AgentDeps, type PendingApproval } from './loop';
@@ -272,6 +273,53 @@ describe('approval gate', () => {
     expect(cards(events).at(-1)).toMatchObject({ status: 'rejected' });
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(result.results[0].content).toMatchObject({ rejected: true });
+  });
+
+  /** A gate whose tool declares editable fields and allows approving with nothing ticked (like a PR review). */
+  function editableAction() {
+    const base = fakeAction();
+    const seen: unknown[] = [];
+    const tool: ActionTool<any> = {
+      async plan(input, ctx) {
+        const plan = await base.tool.plan(input, ctx);
+        return { ...plan, allowEmpty: true, carry: { sha: 'abc' } } as Plan;
+      },
+      edits: z.object({ summary: z.string().max(5) }),
+      editedCard: (_card, edits) => ({ summary: (edits as { summary: string }).summary }),
+      async execute(_input, ids, _ctx, opts) {
+        seen.push({ ids, ...opts });
+        return { ok: true, data: {}, result: 'Done.', detail: 'done' };
+      },
+    };
+    return { tool, seen };
+  }
+
+  it('hands checked edits and the dry-run carry to execute, and allows an empty selection when the tool does', async () => {
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'done' });
+    const { tool, seen } = editableAction();
+    const { events, run, thread, deps } = setup(model, { actions: { bulk_update_issues: tool } });
+    const paused = (await run('x')) as { pending: PendingApproval };
+    await resumeAgent(thread, paused.pending, { approve: true, selected: [], edits: { summary: 'hi' } }, deps);
+
+    expect(seen).toEqual([{ ids: [], edits: { summary: 'hi' }, carry: { sha: 'abc' } }]);
+    // The surface shows the user's edit while running and after.
+    expect(cards(events).slice(1)).toEqual([
+      expect.objectContaining({ status: 'running', summary: 'hi' }),
+      expect.objectContaining({ status: 'approved', summary: 'hi' }),
+    ]);
+  });
+
+  it('changes nothing when the edits do not match the tool schema', async () => {
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'done' });
+    const { tool, seen } = editableAction();
+    const { events, run, thread, deps } = setup(model, { actions: { bulk_update_issues: tool } });
+    const paused = (await run('x')) as { pending: PendingApproval };
+    await resumeAgent(thread, paused.pending, { approve: true, edits: { summary: 'far too long' } }, deps);
+
+    expect(seen).toEqual([]);
+    expect(cards(events).at(-1)).toMatchObject({ status: 'failed' });
+    const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
+    expect(JSON.stringify(result.results[0].content)).toContain('Nothing was changed');
   });
 
   it('lets only one change wait per model turn', async () => {

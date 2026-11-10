@@ -12,6 +12,8 @@ const BY_COMPONENT: Record<string, string[]> = {
   PrList: ['Which PRs have failing CI?', 'Show only draft PRs', 'Show merged PRs'],
   IssueTable: ['Only show bugs', 'Close all open wontfix issues', 'Show the oldest open issues'],
   ApprovalCard: ['Show the open issues', 'Give me a health report of the repo'],
+  ReleaseForm: ['Show my open PRs', 'Give me a health report of the repo'],
+  PrReview: ['Show my open PRs', 'Which PRs have failing CI?'],
 };
 
 const MAX = 3;

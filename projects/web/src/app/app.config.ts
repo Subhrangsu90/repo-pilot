@@ -3,7 +3,6 @@ import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/
 import { provideClientHydration } from '@angular/platform-browser';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { routes } from './app.routes';
-import { provideGenUi } from './genui/registry';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -11,6 +10,5 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes, withComponentInputBinding()),
     provideClientHydration(),
     provideHttpClient(withFetch()),
-    provideGenUi(),
   ],
 };

@@ -130,8 +130,24 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       (seeded issues are days old, so "older than 90 days" matches nothing).
 - [x] Screen Spec alignment (2026-11-11) – six-link nav with live counts, Ask top bar, step strip,
       follow-up chips, live "N PATCH requests" on ApprovalCard, Landing per spec.
-- [ ] Screen Spec screens, in order: PR review (DiffViewer, review submit), Release builder
-      (FormSurface), Audit log (+ undo), History — the last two need Postgres.
+- [x] PR review (2026-11-11) – `/pulls` (open PRs → "Review #N") and `/pulls/:number` (header,
+      step strip, PrReview). `get_pull_request` (read; diff lines numbered for the model, PR body
+      returned as `untrustedDescription`) → `submit_pull_request_review` (write; dry run drops
+      comments not on a diff line, own PR → Comment only) → PrReview (internal: DiffViewer with
+      editable comments, summary, verdict, Submit) → POST with `edits` → one GitHub review on the
+      reviewed commit. Verified live on PR #15 with Gemini: found all 3 planted bugs on the right
+      lines; rejected, nothing posted. Not yet tried: a real submit, and a PR whose description
+      carries a prompt injection.
+- [x] Release builder (2026-11-11) – `/releases`: prompt prefilled from the latest release
+      ("Draft release v1.1.0 from everything since v1.0.0") → `get_release_changes` (merged PRs via
+      search since the previous release, commit and contributor counts) → `create_release` (write;
+      dry run refuses an existing tag and unlinks PRs outside the release) → ReleaseForm (internal;
+      FormSurface + live preview, "edited by you" markers, add/remove entries, pre-release) →
+      Review and publish → confirm step → one GitHub release on the default branch. "Ask agent to
+      rewrite" rejects, then sends a prompt listing the user's values (`rewritePrompt`); keeping
+      them is asked of the model, not enforced. Verified live with Gemini (v1.1.0 from #14);
+      rejected, nothing published. A real publish not tried yet.
+- [ ] Screen Spec screens next: Audit log (+ undo), History — both need Postgres.
 - [ ] Week 3 (rest) – `FormSurface`, audit log + undo, Postgres
       (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
       returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
@@ -152,6 +168,15 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   (`PendingApproval`) sits on the in-memory `Thread` until answered; new prompts on that thread
   get 409. `POST /api/runs/:runId/actions {toolCallId, decision, selected?}` → new run on the same
   thread; the client streams it into the same turn (`awaiting-approval` turn status).
+- The GenUI registry is provided by the lazy `Shell` (not app config), so catalog components stay
+  out of the landing page's initial bundle (336 kB vs the 500 kB budget).
+- Approval gate surfaces: `ApprovalCard`, `PrReview` or `ReleaseForm` (`Plan.component`). An action may declare
+  `edits` (Zod; the user's changes, sent as `edits` on POST /actions and re-checked in the loop;
+  invalid edits change nothing), `editedCard` (show edits while running), `carry` (server-only
+  dry-run facts such as the reviewed commit) and `allowEmpty` (approve with nothing ticked).
+  DiffViewer is internal too: diffs come only from real patches, never typed by the model.
+- `GET /api/pulls` (open PRs as PrCard props) and `GET /api/pulls/:number` (header, no diff) serve
+  the pages; the review page runs its own `AgentSession` (component provider) separate from Ask.
 - `GET /api/overview` → `{repo, openPullRequests, openIssues, rateLimit, viewer}` (one GraphQL call)
   for the nav counts and the Ask top bar; the client reloads it after each run.
 - Follow-up chips: `agent/followups.ts` picks up to 3 prompts from the components a run showed and

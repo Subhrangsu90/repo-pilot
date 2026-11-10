@@ -205,6 +205,139 @@ export const ApprovalCardProps = z.object({
   result: z.string().max(400).optional(),
 });
 
+/** One row of a unified diff. `new` is the line number in the changed file (what review comments point at). */
+export const DiffLine = z.object({
+  kind: z.enum(['hunk', 'add', 'del', 'ctx']),
+  old: z.number().int().positive().optional(),
+  new: z.number().int().positive().optional(),
+  text: z.string().max(500),
+});
+
+export const ReviewComment = z.object({
+  id: z.number().int().positive(),
+  line: z.number().int().positive(),
+  severity: z.enum(['issue', 'suggestion']),
+  body: z.string().min(1).max(1000),
+});
+
+/** One file's diff, built by the server from the real patch (never typed by the model). */
+export const DiffViewerProps = z.object({
+  path: z.string().min(1).max(300),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+  lines: z.array(DiffLine).max(400),
+  comments: z.array(ReviewComment).max(20).default([]),
+});
+
+export const ReviewEvent = z.enum(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']);
+
+/**
+ * An agent-drafted pull request review. Like ApprovalCard it is built by the
+ * server from a dry run, and nothing reaches GitHub until the user submits.
+ * The user may edit or remove comments, rewrite the summary and pick the verdict.
+ */
+export const PrReviewProps = z.object({
+  toolCallId: z.string().min(1).max(100),
+  tool: z.string().max(64),
+  risk: z.enum(['write', 'destructive']),
+  pr: z.object({
+    number: z.number().int().positive(),
+    title: z.string().min(1).max(256),
+    url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }),
+    state: z.enum(['open', 'draft', 'merged', 'closed']),
+    author: githubLogin.optional(),
+    branch: z.string().max(255),
+    base: z.string().max(255),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+    changedFiles: z.number().int().nonnegative(),
+    checks: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
+  }),
+  files: z
+    .array(z.object({ path: z.string().max(300), additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }))
+    .max(100),
+  /** Only the files that carry comments. */
+  diffs: z.array(DiffViewerProps).max(5),
+  comments: z.array(ReviewComment.extend({ path: z.string().max(300) })).max(20),
+  /** Comments the dry run dropped, e.g. a line that is not in the diff. */
+  skipped: z.array(z.object({ id: z.number().int().positive(), reason: z.string().max(120) })).max(20).default([]),
+  summary: z.string().max(2000),
+  event: ReviewEvent,
+  /** GitHub refuses Approve / Request changes on your own pull request. */
+  allowedEvents: z.array(ReviewEvent).min(1).max(3),
+  eventNote: z.string().max(200).optional(),
+  status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
+  /** After a decision: the comment ids that were posted. */
+  selected: z.array(z.number().int().positive()).max(20).optional(),
+  result: z.string().max(400).optional(),
+  reviewUrl: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+});
+
+/** What the user changed in a PrReview before submitting (sent with the approval). */
+export const PrReviewEdits = z.object({
+  event: ReviewEvent,
+  summary: z.string().trim().min(1).max(2000),
+  comments: z.array(z.object({ id: z.number().int().positive(), body: z.string().trim().min(1).max(1000) })).max(20),
+});
+export type PrReviewEdits = z.infer<typeof PrReviewEdits>;
+
+/** Release tags look like v1.2.0 or 1.2.0-rc.1. */
+export const releaseTag = z
+  .string()
+  .regex(/^v?\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.-]{1,20})?$/, 'Use a version tag such as v1.2.0');
+
+const ReleaseEntry = z.object({
+  text: z.string().trim().min(1).max(200),
+  /** A merged pull request in this release. */
+  pr: z.number().int().positive().optional(),
+});
+const ReleaseSections = z.object({
+  features: z.array(ReleaseEntry).max(30).default([]),
+  fixes: z.array(ReleaseEntry).max(30).default([]),
+  breaking: z.array(ReleaseEntry).max(30).default([]),
+});
+
+/**
+ * An agent-drafted release (design system FormSurface + the Screen Spec's live
+ * preview). Shared state: the user edits any field; nothing is published until
+ * they review and publish.
+ */
+export const ReleaseFormProps = z.object({
+  toolCallId: z.string().min(1).max(100),
+  tool: z.string().max(64),
+  risk: z.enum(['write', 'destructive']),
+  repo: z.string().max(140),
+  /** Branch the new tag points at. */
+  target: z.string().max(255),
+  previousTag: z.string().max(60).optional(),
+  stats: z.object({
+    commits: z.number().int().nonnegative(),
+    pullRequests: z.number().int().nonnegative(),
+    contributors: z.number().int().nonnegative(),
+  }),
+  /** Merged PRs in the release, for linking entries. */
+  pulls: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(256) })).max(100),
+  tag: releaseTag,
+  name: z.string().trim().min(1).max(120),
+  prerelease: z.boolean().default(false),
+  sections: ReleaseSections,
+  /** Entries the dry run changed, e.g. a PR link that is not part of this release. */
+  notes: z.array(z.string().max(160)).max(20).default([]),
+  status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
+  selected: z.array(z.number().int().positive()).max(1).optional(),
+  result: z.string().max(400).optional(),
+  releaseUrl: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+});
+
+/** What the user changed in a ReleaseForm before publishing. */
+export const ReleaseEdits = z.object({
+  tag: releaseTag,
+  name: z.string().trim().min(1).max(120),
+  prerelease: z.boolean(),
+  sections: ReleaseSections,
+});
+export type ReleaseEdits = z.infer<typeof ReleaseEdits>;
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -277,6 +410,27 @@ export const catalog = {
     internal: true,
     props: ApprovalCardProps,
     events: ['approve', 'reject', 'edit'],
+  },
+  DiffViewer: {
+    group: 'data',
+    description: 'A unified diff of one file with inline review comments. Built by the server from the real patch only.',
+    internal: true,
+    props: DiffViewerProps,
+    events: ['comment-edit', 'comment-remove'],
+  },
+  PrReview: {
+    group: 'agentic',
+    description: 'An agent-drafted pull request review the user edits and submits. Built by the server only.',
+    internal: true,
+    props: PrReviewProps,
+    events: ['approve', 'reject'],
+  },
+  ReleaseForm: {
+    group: 'agentic',
+    description: 'An agent-drafted release the user edits, previews and publishes. Built by the server only.',
+    internal: true,
+    props: ReleaseFormProps,
+    events: ['approve', 'reject', 'rewrite'],
   },
   StepTimeline: {
     group: 'agentic',

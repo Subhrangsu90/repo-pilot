@@ -76,7 +76,7 @@ function componentOf(node: unknown): string {
 
             @for (surface of turn.surfaces; track surface.surfaceId) {
               @let name = componentName(surface.node);
-              @if (name === 'ApprovalCard') {
+              @if (name === 'ApprovalCard' || name === 'PrReview' || name === 'ReleaseForm') {
                 <!-- Built by the server, not the agent: it carries its own risk badge and frame. -->
                 <app-genui-host class="animate-genui-enter" [node]="surface.node" [emit]="onEmit" />
               } @else {

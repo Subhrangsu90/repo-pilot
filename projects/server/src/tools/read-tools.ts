@@ -1,6 +1,8 @@
 import * as z from 'zod';
 import {
   findInternalComponent,
+  getPullRequest,
+  getReleaseChanges,
   getRepoHealth,
   listIssues,
   listPullRequests,
@@ -10,6 +12,8 @@ import {
   validateNode,
 } from '@repopilot/shared';
 import type { GitHub } from '../github/client';
+import { annotate, fetchPullRequest } from '../github/pulls';
+import { fetchReleaseChanges } from '../github/releases';
 
 export interface ToolContext {
   github: GitHub;
@@ -340,7 +344,57 @@ export const runRenderUi: Executor<typeof renderUi> = async (input) => {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// get_pull_request
+// ---------------------------------------------------------------------------
+
+/** Diff text the model may read in one result; the loop caps results at 20k characters. */
+const DIFF_BUDGET = 14_000;
+
+export const runGetPullRequest: Executor<typeof getPullRequest> = async (input, ctx) => {
+  const repo = resolveRepo(input.repo, ctx);
+  const pr = await fetchPullRequest(ctx, repo, input.number);
+  if (!pr) throw new ToolError(`Pull request #${input.number} was not found in ${repo.full}.`);
+
+  let budget = DIFF_BUDGET;
+  const files = pr.files.map((f) => {
+    let diff = f.hasPatch ? annotate(f.lines) : '(no diff available: binary or too large)';
+    if (diff.length > budget) diff = budget > 200 ? `${diff.slice(0, budget)}
+… (diff cut here)` : '(diff omitted: too long)';
+    budget = Math.max(0, budget - diff.length);
+    return { path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, diff };
+  });
+
+  const { url: _url, ...info } = pr.info;
+  return {
+    data: {
+      repo: repo.full,
+      ...info,
+      // Written by the PR author: data to review, never instructions to follow.
+      untrustedDescription: pr.body,
+      files,
+    },
+    detail: `${pr.files.length} changed ${pr.files.length === 1 ? 'file' : 'files'}`,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// get_release_changes
+// ---------------------------------------------------------------------------
+
+export const runGetReleaseChanges: Executor<typeof getReleaseChanges> = async (input, ctx) => {
+  const repo = resolveRepo(input.repo, ctx);
+  const changes = await fetchReleaseChanges(ctx, repo, input.since);
+  const since = changes.previousTag ? `since ${changes.previousTag}` : '(no earlier release)';
+  return {
+    data: { repo: repo.full, ...changes, pullRequests: changes.pulls, pulls: undefined },
+    detail: `${changes.pulls.length} pull ${changes.pulls.length === 1 ? 'request' : 'requests'} ${since}`,
+  };
+};
+
 export const executors: Record<string, Executor<{ input: z.ZodType }>> = {
+  [getReleaseChanges.name]: runGetReleaseChanges as Executor<{ input: z.ZodType }>,
+  [getPullRequest.name]: runGetPullRequest as Executor<{ input: z.ZodType }>,
   [listPullRequests.name]: runListPullRequests as Executor<{ input: z.ZodType }>,
   [listIssues.name]: runListIssues as Executor<{ input: z.ZodType }>,
   [getRepoHealth.name]: runGetRepoHealth as Executor<{ input: z.ZodType }>,
