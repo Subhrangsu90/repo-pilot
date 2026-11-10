@@ -298,7 +298,8 @@ async function carryOut(pending: PendingApproval, decision: Decision, deps: Agen
     if (action.editedCard) shownCard = { ...shownCard, ...action.editedCard(shownCard, edits) };
   }
 
-  emit({ type: 'STEP_FINISHED', stepId: waitId, status: 'done', detail: `Approved ${ids.length}` });
+  // "Approved 2" for item lists; just "Approved" for a review or a release, which have no items to tick.
+  emit({ type: 'STEP_FINISHED', stepId: waitId, status: 'done', detail: pending.ids.length ? `Approved ${ids.length}` : 'Approved' });
   update({ status: 'running', selected: ids });
 
   const spec = getToolSpec(pending.tool);
