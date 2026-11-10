@@ -17,7 +17,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
         }
         <p class="px-5 py-6 text-center text-body-sm text-fg-muted">{{ props().emptyText }}</p>
       } @else {
-        <table class="w-full min-w-[560px] border-collapse text-left text-[14px]">
+        <table class="w-full min-w-[560px] border-collapse text-left text-body-md">
           <caption class="px-5 pt-4 pb-2 text-left">
             <span class="text-body font-semibold">{{ props().title ?? 'Issues' }}</span>
             @if (props().selectable) {
@@ -42,7 +42,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
               }
               <th scope="col" class="px-5 py-2.5 font-normal">Issue</th>
               <th scope="col" class="px-2.5 py-2.5 font-normal">Labels</th>
-              <th scope="col" class="px-2.5 py-2.5 font-normal">Author</th>
+              <th scope="col" class="px-2.5 py-2.5 font-normal">Assignee</th>
               <th scope="col" class="px-5 py-2.5 text-right font-normal">Age</th>
             </tr>
           </thead>
@@ -73,7 +73,13 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
                     }
                   </div>
                 </td>
-                <td class="px-2.5 py-2.5 font-mono text-body-sm text-fg-muted">{{ row.author ?? '—' }}</td>
+                <td class="px-2.5 py-2.5 text-body-sm text-fg-muted">
+                  @if (row.assignees.length) {
+                    <span class="font-mono">{{ row.assignees.join(', ') }}</span>
+                  } @else {
+                    Unassigned
+                  }
+                </td>
                 <td class="px-5 py-2.5 text-right whitespace-nowrap text-fg-muted tabular-nums">
                   {{ row.ageDays }} {{ row.ageDays === 1 ? 'day' : 'days' }}
                 </td>

@@ -1,18 +1,27 @@
-import type { AgentEvent, PropsOf, UiSurface } from '@repopilot/shared';
+import type { AgentEvent, ApprovalRequest, PropsOf, UiSurface } from '@repopilot/shared';
 
 export type Step = PropsOf<'StepTimeline'>['steps'][number];
 
-/** One prompt and everything the agent streamed back for it. */
+/** One prompt and everything the agent streamed back for it, across the runs it took. */
 export interface Turn {
   id: string;
   prompt: string;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'awaiting-approval' | 'done' | 'error';
   steps: Step[];
   /** Validated server-side; validated again by GenUiHost before rendering. */
   surfaces: UiSurface[];
   text: string;
   error?: string;
+  /** The ApprovalCard this turn is paused on. */
+  pending?: ApprovalRequest;
+  /** Sending the approve / reject decision failed; the card can be used again. */
+  actionError?: string;
+  /** Follow-up prompts suggested from what this turn showed (chips above the prompt box). */
+  followups?: string[];
 }
+
+/** Client-side step shown while a run waits; the resumed run finishes it under the same id. */
+export const approvalStepId = (toolCallId: string) => `approval-${toolCallId}`;
 
 export function newTurn(id: string, prompt: string): Turn {
   return { id, prompt, status: 'running', steps: [], surfaces: [], text: '' };
@@ -46,6 +55,11 @@ export function applyEvent(turn: Turn, event: AgentEvent): Turn {
       return { ...turn, text: turn.text + event.delta };
 
     case 'CUSTOM': {
+      if (event.name === 'approval') {
+        const step: Step = { id: approvalStepId(event.value.toolCallId), label: 'Waiting for your approval', status: 'pending' };
+        return { ...turn, pending: event.value, steps: [...turn.steps, step] };
+      }
+      if (event.name === 'followups') return { ...turn, followups: event.value.prompts.slice(0, 3) };
       if (event.name !== 'ui') return turn;
       const exists = turn.surfaces.some((s) => s.surfaceId === event.value.surfaceId);
       return {
@@ -58,7 +72,7 @@ export function applyEvent(turn: Turn, event: AgentEvent): Turn {
     }
 
     case 'RUN_FINISHED':
-      return { ...turn, status: 'done', steps: settle(turn.steps, 'done') };
+      return { ...turn, status: turn.pending ? 'awaiting-approval' : 'done', steps: settle(turn.steps, 'done') };
 
     case 'RUN_ERROR':
       return { ...turn, status: 'error', error: event.message, steps: settle(turn.steps, 'error') };

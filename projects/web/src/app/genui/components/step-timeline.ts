@@ -3,7 +3,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
 import { Icon } from '../../shared/ui/icon';
 
 /**
- * Live progress of a run. Driven by STEP_* events, not emitted by the model.
+ * Live progress of a run (rows, or one wrapping line with `inline`). Driven by STEP_* events, not emitted by the model.
  * done = success check, running = text ring, pending = border-strong ring,
  * error = danger cross plus the reason.
  */
@@ -12,10 +12,11 @@ import { Icon } from '../../shared/ui/icon';
   imports: [Icon],
   host: { class: 'block' },
   template: `
-    <ol class="flex flex-col gap-3" aria-label="Agent progress">
+    <ol [class]="inline() ? 'flex flex-wrap items-center gap-x-4 gap-y-2' : 'flex flex-col gap-3'" aria-label="Agent progress">
       @for (step of props().steps; track step.id) {
         <li
-          class="flex items-start gap-3 text-[14px]"
+          class="flex items-start gap-3 text-body-md"
+          [class.gap-2]="inline()"
           [class.text-fg-muted]="step.status === 'pending'"
           [attr.aria-current]="step.status === 'running' ? 'step' : null"
         >
@@ -27,7 +28,7 @@ import { Icon } from '../../shared/ui/icon';
                 </span>
               }
               @case ('running') {
-                <span class="size-5 animate-spin rounded-full border-2 border-fg border-t-transparent"></span>
+                <span class="size-5 rounded-full border-2 border-fg"></span>
               }
               @case ('error') {
                 <span class="grid size-5 place-items-center rounded-full bg-danger text-bg">
@@ -54,4 +55,6 @@ import { Icon } from '../../shared/ui/icon';
 export class StepTimeline {
   readonly props = input.required<PropsOf<'StepTimeline'>>();
   readonly emit = input<EmitFn>();
+  /** The Screen Spec's "step strip": the same steps on one wrapping line (Ask, PR review). */
+  readonly inline = input(false);
 }

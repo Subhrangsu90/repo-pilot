@@ -10,13 +10,13 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
   selector: 'app-error-fallback',
   host: { class: 'block' },
   template: `
-    <div class="card flex flex-col gap-3 border-danger p-[18px]" role="group" aria-label="Component could not be rendered">
+    <div class="card flex flex-col gap-3 border-danger p-card" role="group" aria-label="Component could not be rendered">
       <p class="text-body">Couldn't render this part of the answer.</p>
-      <p class="rounded-sm bg-bg px-3 py-2 font-mono text-[12px] break-words whitespace-pre-wrap text-fg-muted">{{ props().message }}</p>
+      <p class="rounded-sm bg-bg px-3 py-2 font-mono text-caption break-words whitespace-pre-wrap text-fg-muted">{{ props().message }}</p>
       @if (props().raw) {
         <details>
           <summary class="cursor-pointer text-body-sm text-fg-muted">Show raw payload</summary>
-          <pre class="mt-2 max-h-64 overflow-auto rounded-sm bg-bg p-3 font-mono text-[12px] text-fg-muted">{{ props().raw }}</pre>
+          <pre class="mt-2 max-h-64 overflow-auto rounded-sm bg-bg p-3 font-mono text-caption text-fg-muted">{{ props().raw }}</pre>
         </details>
       }
       <button type="button" class="btn self-start" (click)="retry()">Ask the agent to retry</button>
@@ -27,7 +27,8 @@ export class ErrorFallback {
   readonly props = input.required<PropsOf<'ErrorFallback'>>();
   readonly emit = input<EmitFn>();
 
+  /** Asks the agent to try again, telling it what was wrong. (The server already reported the error when it happened.) */
   protected retry() {
-    this.emit()?.({ component: 'ErrorFallback', name: 'retry' });
+    this.emit()?.({ component: 'ErrorFallback', name: 'retry', payload: { message: this.props().message } });
   }
 }

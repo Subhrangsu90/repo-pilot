@@ -8,7 +8,13 @@ export type IconName =
   | 'sun'
   | 'moon'
   | 'arrow-right'
-  | 'refresh';
+  | 'refresh'
+  | 'pull-request'
+  | 'issue'
+  | 'release'
+  | 'history'
+  | 'audit'
+  | 'chevron-down';
 
 /**
  * Stroke icons from the RepoPilot designs, drawn in currentColor. Decorative
@@ -53,6 +59,31 @@ export type IconName =
         }
         @case ('refresh') {
           <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />
+        }
+        <!-- Side-nav icons from the design system's SideNav preview. -->
+        @case ('pull-request') {
+          <circle cx="6" cy="6" r="2.5" />
+          <circle cx="6" cy="18" r="2.5" />
+          <circle cx="18" cy="18" r="2.5" />
+          <path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4" />
+        }
+        @case ('issue') {
+          <circle cx="12" cy="12" r="8.5" />
+          <circle cx="12" cy="12" r="1.5" />
+        }
+        @case ('release') {
+          <path d="M3 12V4h8l10 10-8 8L3 12z" />
+        }
+        @case ('history') {
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 7.5V12l3 2" />
+        }
+        @case ('audit') {
+          <path d="M4 6h16M4 12h10M4 18h7" />
+          <circle cx="18" cy="17" r="3.5" />
+        }
+        @case ('chevron-down') {
+          <path d="M6 9l6 6 6-6" />
         }
       }
     </svg>

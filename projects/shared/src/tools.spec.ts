@@ -1,6 +1,18 @@
-import { validateNode } from './catalog';
+import { findInternalComponent, validateNode } from './catalog';
 import { prList } from './fixtures';
-import { listIssues, listPullRequests, needsApproval, toolSpecs } from './tools';
+import { bulkUpdateIssues, listIssues, listPullRequests, needsApproval, toolSpecs } from './tools';
+
+describe('findInternalComponent', () => {
+  it('finds app-only components at any depth', () => {
+    const card = { component: 'ApprovalCard', props: {} };
+    expect(findInternalComponent(card)).toBe('ApprovalCard');
+    expect(findInternalComponent({ component: 'Grid', props: { children: [{ component: 'Section', props: { children: [card] } }] } })).toBe(
+      'ApprovalCard',
+    );
+    expect(findInternalComponent({ component: 'Grid', props: { children: [{ component: 'StatCard', props: {} }] } })).toBeNull();
+    expect(findInternalComponent('nonsense')).toBeNull();
+  });
+});
 
 describe('needsApproval', () => {
   it('lets read tools run immediately', () => {
@@ -26,6 +38,19 @@ describe('tool inputs', () => {
 
   it('cap limits', () => {
     expect(listPullRequests.input.safeParse({ limit: 500 }).success).toBe(false);
+  });
+
+  it('cap bulk changes at 100 issues and need at least one', () => {
+    const numbers = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+    expect(bulkUpdateIssues.input.safeParse({ issueNumbers: numbers(100), action: 'close' }).success).toBe(true);
+    expect(bulkUpdateIssues.input.safeParse({ issueNumbers: numbers(101), action: 'close' }).success).toBe(false);
+    expect(bulkUpdateIssues.input.safeParse({ issueNumbers: [], action: 'close' }).success).toBe(false);
+  });
+
+  it('give the model no way to skip the dry run', () => {
+    expect(bulkUpdateIssues.risk).toBe('destructive');
+    expect(needsApproval(bulkUpdateIssues.name)).toBe(true);
+    expect(Object.keys(bulkUpdateIssues.input.shape)).not.toContain('dryRun');
   });
 
   it('have unique names', () => {

@@ -44,9 +44,17 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - Persistence (doc §9b): **Postgres in local Docker + Drizzle, added in week 3** (runs, audit
   entries, then sessions/History). A hosted Postgres is chosen at deploy time (week 4).
 - Routes: `/` landing (public), app pages inside the `Shell` layout: `/ask` (chat; `?q=` sends a
-  prompt). Side nav lists only designed pages that exist; add Pull requests, Issues, Releases,
-  History and Audit log as they are built. `/playground` is a dev-only renderer test page: not in
-  the page designs, so it stays out of the nav and landing (reachable by URL only).
+  prompt). The side nav shows the Screen Spec's six links (Ask, Pull requests, Issues, Releases,
+  History, Audit log) with live PR/issue counts; unbuilt ones are dimmed, not links ("Coming soon"),
+  and get a `path` in `NAV` (`layout/shell.ts`) as each page is built. Model switch on Ask only;
+  each page draws its own top bar (Ask: repo, API quota, avatar); theme toggle sits in the nav foot.
+  `/playground` is a dev-only renderer test page, out of the nav and landing (URL only).
+- Screen Spec (2026-11-11, user's Claude Docs doc): <https://claude.ai/artifact/7PvQ8ojSvhP7zT8EaCvKwp>
+  — the 7 screens, shared layout, play-mode behaviour and open gaps; read it with the Claude Docs
+  tools. Where it and the design system disagree, the design system wins (user's decision); the
+  differences are listed in the spec's "Inconsistencies between screens". Build order agreed: align
+  Landing, layout, Ask and Approval (done 2026-11-11), then PR review, Release builder, Audit log
+  and History one at a time as working features.
 
 ## Design sources (claude.ai artifacts, owned by the user)
 
@@ -58,6 +66,13 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   `project/{Main,Workspace,Review,Approval,Release,Audit,History}.dc.html` (landing, Ask/health
   report, PR review, bulk-close approval, release builder, audit log, session history).
 - Design hexes outside `tokens.json` (#D0D0D4, #5A5A60, #333336, #232325) map to the nearest token.
+  When a page artboard and the design system disagree, the design system wins.
+- Design system v6 (2026-11-10, decided by the user): added tokens `body-md` (14), `caption` (12),
+  `axis` (11, mono), `space-5` (20), `space-card` (18), `radius-xs` (7); inputs use `radius-md`;
+  disabled buttons `text-muted` on `surface-3`; StatCard warning = `border-strong` + context in
+  `text` (never `risk`), danger = `danger` border + context; chips and segments 44px. The app uses
+  no hand-written sizes (only layout widths such as `max-w-[...]`). PrCard shows `branch`
+  (`headRefName`); IssueTable shows `assignees` ("Unassigned" when empty).
 
 ## Rules that must not break
 
@@ -82,9 +97,12 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - Styling: Tailwind v4 utilities over the design-system tokens in `projects/web/src/styles.css`.
   Raw vars keep DS names (`--surface-2`); utilities: `bg-bg`, `bg-surface-1..3`, `border-border`,
   `border-border-strong`, `text-fg` / `text-fg-muted` / `text-fg-faint` (DS `text*`), `primary`,
-  `risk`, `success`, `danger` (+ `-soft`), `neutral-soft`. Type: `font-display`, `text-h1`, `text-h2`,
-  `text-stat`, `text-body`, `text-body-sm`, `text-label`, `text-badge`. Radius sm 8 / md 10 / lg 14 /
-  xl 18. Tailwind's default palette is removed (no `text-white`, `bg-gray-*`).
+  `risk`, `success`, `danger` (+ `-soft`), `neutral-soft`. Type: `font-display`, `text-display`,
+  `text-h1`, `text-h2`, `text-stat`, `text-body`, `text-body-md`, `text-body-sm`, `text-label`,
+  `text-badge`, `text-caption`, `text-axis`. Spacing: Tailwind's 4px scale (`p-3` = `space-3`) plus
+  `p-card` / `gap-card` (18). Radius xs 7 / sm 8 / md 10 / lg 14 / xl 18. Never write `text-[14px]`,
+  `p-[18px]` and the like: if a size has no token, add it to the design system first. Tailwind's
+  default palette is removed (no `text-white`, `bg-gray-*`).
 - Shared classes: `.card`, `.agent-surface`, `.btn` (+ `-primary`, `-risk`, `-ghost`), `.chip`,
   `.badge` (+ `-write`, `-risk`, `-success`, `-danger`, `-agent`), `.field`, `.checkbox`. One filled
   button per surface; `btn-risk` only for a destructive approve. Every agent surface in the chat
@@ -103,7 +121,18 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - [x] Design restyle (2026-11-10) – design-system tokens + Graphite/Light themes, landing page,
       side-nav `Shell`, Ask page and all catalog components restyled, model switch (Cloud / Local
       Gemma → `model` on `POST /api/runs`).
-- [ ] Week 3 – approval gate, dry-run, `ApprovalCard`, `FormSurface`, audit log + undo, Postgres
+- [x] Week 3 step 2 (2026-11-10) – approval gate: `bulk_update_issues` (destructive; close/reopen
+      ≤100), server-side dry run (`plan`) → `ApprovalCard` (internal; `render_ui` refuses internal
+      components even nested) → run pauses → `POST /api/runs/:id/actions` → `execute` only the
+      approved ids from the dry run → card updated in place → model summarises. Verified on the live
+      server with Gemma: card for #9–#11, 409 new prompt while waiting, 400 empty approve, reject
+      resumes, 404 on a second answer, issues untouched. Demo prompt: "Close all open wontfix issues"
+      (seeded issues are days old, so "older than 90 days" matches nothing).
+- [x] Screen Spec alignment (2026-11-11) – six-link nav with live counts, Ask top bar, step strip,
+      follow-up chips, live "N PATCH requests" on ApprovalCard, Landing per spec.
+- [ ] Screen Spec screens, in order: PR review (DiffViewer, review submit), Release builder
+      (FormSurface), Audit log (+ undo), History — the last two need Postgres.
+- [ ] Week 3 (rest) – `FormSurface`, audit log + undo, Postgres
       (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
       returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
       keep tool calls/results and provider `raw` parts, not only `role` + `text`, or replayed
@@ -115,8 +144,22 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - `POST /api/runs {prompt, threadId?, model?: 'cloud'|'local'}` → `{runId, threadId}` (`model`
   omitted = `LLM_PROVIDER`; local = Ollama; cloud = the configured cloud provider, else Gemini); `GET /api/runs/:id/events` is SSE with
   AG-UI-named events (`projects/shared/src/events.ts`). Runs buffer events, so late clients replay.
-- Tools return `{ data (for the model), ui (UiNode for the user), detail (timeline) }`. UI is
-  validated in the loop before streaming; non-read tools are refused in `runTool` until week 3.
+- Read tools return `{ data (for the model), ui (UiNode for the user), detail (timeline) }`. UI is
+  validated in the loop before streaming.
+- Write/destructive tools live in `projects/server/src/tools/actions.ts` as `{ plan, execute }`.
+  `plan` only reads (dry run) and returns a card draft + the item ids; `execute(input, ids)` is only
+  called by `resumeAgent` after approval. The model has no `dryRun` input. A paused call
+  (`PendingApproval`) sits on the in-memory `Thread` until answered; new prompts on that thread
+  get 409. `POST /api/runs/:runId/actions {toolCallId, decision, selected?}` → new run on the same
+  thread; the client streams it into the same turn (`awaiting-approval` turn status).
+- `GET /api/overview` → `{repo, openPullRequests, openIssues, rateLimit, viewer}` (one GraphQL call)
+  for the nav counts and the Ask top bar; the client reloads it after each run.
+- Follow-up chips: `agent/followups.ts` picks up to 3 prompts from the components a run showed and
+  sends `CUSTOM followups` before RUN_FINISHED (not while an approval waits). Only prompts the
+  current tools can answer.
+- ApprovalCard focuses the card itself, never Approve (a stray Enter must not approve). "Edit
+  request" rejects the change and puts the prompt back in the composer (`AgentSession.draft`).
+  ErrorFallback "Ask the agent to retry" sends a new prompt with the reason.
 - If the model fails after UI is on screen, the run finishes with a "no summary" note instead of
   an error (quota/503 resilience for live demos). A failed run rolls the thread back.
 - Gemini free tier: newest Flash models often 503; daily/minute quota (429) runs out quickly when

@@ -15,7 +15,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
             <li class="flex items-center gap-2.5">
               @if (c.avatarUrl) {
                 <img
-                  class="size-[30px] shrink-0 rounded-full bg-surface-3"
+                  class="size-7.5 shrink-0 rounded-full bg-surface-3"
                   [src]="c.avatarUrl"
                   alt=""
                   width="30"
@@ -25,12 +25,12 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
                 />
               } @else {
                 <span
-                  class="grid size-[30px] shrink-0 place-items-center rounded-full bg-surface-3 text-[12px] font-semibold uppercase"
+                  class="grid size-7.5 shrink-0 place-items-center rounded-full bg-surface-3 text-caption font-semibold uppercase"
                   aria-hidden="true"
                   >{{ c.login.slice(0, 2) }}</span
                 >
               }
-              <span class="min-w-0 flex-1 truncate font-mono text-[14px]">{{ c.login }}</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-body-md">{{ c.login }}</span>
               <span class="text-body-sm text-fg-muted tabular-nums">{{ c.commits }} commits</span>
             </li>
           }

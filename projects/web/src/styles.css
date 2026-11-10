@@ -112,6 +112,8 @@
   --text-stat--font-weight: 600;
   --text-body: 15px;
   --text-body--line-height: 24px;
+  --text-body-md: 14px;
+  --text-body-md--line-height: 20px;
   --text-body-sm: 13px;
   --text-body-sm--line-height: 20px;
   --text-label: 13px;
@@ -120,10 +122,18 @@
   --text-badge: 12px;
   --text-badge--line-height: 16px;
   --text-badge--font-weight: 600;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-axis: 11px; /* mono, chart axes only */
+  --text-axis--line-height: 14px;
+
+  /* Spacing: Tailwind's 4px scale (p-3 = space-3, p-5 = space-5, ...) plus the one off-scale step. */
+  --spacing-card: 18px; /* space-card: small data cards */
 
   /* Radius grows with the container. */
-  --radius-sm: 8px; /* inputs, nav items */
-  --radius-md: 10px; /* buttons */
+  --radius-xs: 7px; /* segments of a segmented control */
+  --radius-sm: 8px; /* nav items, code blocks */
+  --radius-md: 10px; /* buttons and inputs */
   --radius-lg: 14px; /* cards */
   --radius-xl: 18px; /* agent surfaces */
 
@@ -171,7 +181,7 @@
 
   /* Buttons: at most one filled (primary or risk) per surface; 44px tall. */
   .btn {
-    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-border-strong bg-transparent px-4 text-[14px] font-medium text-fg transition-colors hover:bg-neutral-soft;
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-border-strong bg-transparent px-4 text-body-md font-medium text-fg transition-colors hover:bg-neutral-soft;
   }
   .btn-primary {
     @apply border-transparent bg-primary font-semibold text-on-primary hover:bg-primary/90;
@@ -182,13 +192,14 @@
   .btn-ghost {
     @apply border-transparent text-fg-muted hover:text-fg;
   }
+  /* text-muted, not text-faint: faint fails contrast on surface-3. */
   .btn:disabled {
-    @apply cursor-not-allowed border-transparent bg-surface-3 text-fg-faint;
+    @apply cursor-not-allowed border-transparent bg-surface-3 text-fg-muted;
   }
 
-  /* Suggestion chips (pill buttons). */
+  /* Suggestion chips (pill buttons), 44px like every control. */
   .chip {
-    @apply inline-flex min-h-10 cursor-pointer items-center rounded-full border border-border-strong bg-transparent px-3.5 text-body-sm text-fg-muted transition-colors hover:bg-neutral-soft hover:text-fg disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex min-h-11 cursor-pointer items-center rounded-full border border-border-strong bg-transparent px-3.5 text-body-sm text-fg-muted transition-colors hover:bg-neutral-soft hover:text-fg disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   /* Badges: one short phrase, always a word, never colour alone. */
@@ -216,7 +227,7 @@
   }
 
   .checkbox {
-    @apply size-[18px] shrink-0 cursor-pointer accent-primary;
+    @apply size-4.5 shrink-0 cursor-pointer accent-primary;
   }
   .checkbox-risk {
     @apply accent-risk;

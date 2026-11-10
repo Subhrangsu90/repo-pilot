@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent, StartRunResponse } from '@repopilot/shared';
+import type { AgentEvent, ModelOption, StartRunResponse } from '@repopilot/shared';
 import type { ChatMessage } from '../llm';
+import type { PendingApproval } from './loop';
 
 /**
- * In-memory runs and threads (Postgres arrives with the audit log in week 3).
+ * In-memory runs and threads (moving to Postgres with the audit log).
  * A run buffers its events, so a client that connects late, or reconnects,
  * replays everything from the start.
  */
@@ -16,10 +17,15 @@ interface Run {
   controller: AbortController;
 }
 
-interface Thread {
+export interface Thread {
+  id: string;
   messages: ChatMessage[];
   busy: boolean;
   touched: number;
+  /** Model picked in the UI when the conversation last ran; resumed runs use it too. */
+  model?: ModelOption;
+  /** A tool call paused on an ApprovalCard. New prompts are refused until it is answered. */
+  pending?: PendingApproval;
 }
 
 const RUN_TTL_MS = 10 * 60_000;
@@ -30,11 +36,21 @@ const threads = new Map<string, Thread>();
 
 export class ThreadBusyError extends Error {}
 
-export type RunBody = (thread: ChatMessage[], emit: (e: AgentEvent) => void, run: { id: string; signal: AbortSignal }) => Promise<void>;
+export type RunBody = (thread: Thread, emit: (e: AgentEvent) => void, run: { id: string; signal: AbortSignal }) => Promise<void>;
+
+export function getThread(id: string | undefined): Thread | undefined {
+  return id ? threads.get(id) : undefined;
+}
+
+/** The thread whose pending approval was raised by this run. */
+export function findPendingByRun(runId: string): Thread | undefined {
+  for (const thread of threads.values()) if (thread.pending?.runId === runId) return thread;
+  return undefined;
+}
 
 export function startRun(threadId: string | undefined, body: RunBody): StartRunResponse {
   const tid = threadId && threads.has(threadId) ? threadId : randomUUID();
-  const thread = threads.get(tid) ?? { messages: [], busy: false, touched: Date.now() };
+  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now() };
   if (thread.busy) throw new ThreadBusyError('This conversation is still running.');
   thread.busy = true;
   thread.touched = Date.now();
@@ -51,7 +67,7 @@ export function startRun(threadId: string | undefined, body: RunBody): StartRunR
   };
 
   emit({ type: 'RUN_STARTED', threadId: tid, runId: run.id });
-  void body(thread.messages, emit, { id: run.id, signal: run.controller.signal })
+  void body(thread, emit, { id: run.id, signal: run.controller.signal })
     .then(() => emit({ type: 'RUN_FINISHED', threadId: tid, runId: run.id }))
     .catch((err: Error) => emit({ type: 'RUN_ERROR', message: err.message.slice(0, 300) }))
     .finally(() => {

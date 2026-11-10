@@ -27,7 +27,7 @@ const CI: Record<Pr['ci'], { label: string; dot: string | null }> = {
   host: { class: 'block' },
   template: `
     @let p = props();
-    <article class="card relative flex flex-col gap-2.5 p-4 has-[a]:hover:bg-surface-3">
+    <article class="group card relative flex flex-col gap-2.5 p-4 has-[a]:hover:bg-surface-3">
       <div class="flex flex-wrap items-center gap-2.5">
         <span class="badge" [class]="state().cls">{{ state().label }}</span>
         <h3 class="text-body font-semibold">
@@ -39,12 +39,16 @@ const CI: Record<Pr['ci'], { label: string; dot: string | null }> = {
             {{ p.title }}
           }
         </h3>
-        <span class="font-mono text-body-sm text-fg-faint">#{{ p.number }}</span>
+        <!-- text-faint fails contrast on surface-3, so it steps up to muted on hover. -->
+        <span class="font-mono text-body-sm text-fg-faint group-has-[a]:group-hover:text-fg-muted">#{{ p.number }}</span>
       </div>
 
       <div class="flex flex-wrap gap-x-4.5 gap-y-1.5 text-body-sm text-fg-muted">
         @if (p.author) {
           <span class="font-mono">{{ p.author }}</span>
+        }
+        @if (p.branch) {
+          <span class="max-w-full truncate font-mono" [title]="p.branch"><span class="sr-only">Branch: </span>{{ p.branch }}</span>
         }
         <span class="inline-flex items-center gap-1.5">
           @if (ci().dot; as dot) {

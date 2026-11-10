@@ -84,6 +84,8 @@ export const IssueRow = z.object({
   state: z.enum(['open', 'closed']),
   labels: z.array(z.string().max(50)).max(10).default([]),
   author: githubLogin.optional(),
+  // Shown in the table (design system: "labels, assignee and age").
+  assignees: z.array(githubLogin).max(10).default([]),
   ageDays: z.number().int().nonnegative(),
 });
 
@@ -120,6 +122,13 @@ export const PrCardProps = z.object({
   number: z.number().int().positive(),
   title: z.string().min(1).max(256),
   author: githubLogin.optional(),
+  // Head branch, shown as text. No whitespace or control characters.
+  branch: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[^\s\x00-\x1f\x7f]+$/, 'Not a valid branch name')
+    .optional(),
   state: z.enum(['open', 'draft', 'merged', 'closed']),
   ci: z.enum(['success', 'failure', 'pending', 'none']).default('none'),
   reviewers: z.array(githubLogin).max(10).default([]),
@@ -148,6 +157,52 @@ export const StepTimelineProps = z.object({
       }),
     )
     .max(30),
+});
+
+/**
+ * Human-in-the-loop: the preview of a write or destructive tool call. Built by
+ * the server from a dry run, never by the model (the entry is internal and
+ * render_ui refuses it). The same surface is re-sent with a new `status` as
+ * the decision is carried out.
+ */
+export const ApprovalCardProps = z.object({
+  toolCallId: z.string().min(1).max(100),
+  tool: z.string().max(64),
+  risk: z.enum(['write', 'destructive']),
+  /** "close" + "issue" → title "Close 5 issues", button "Approve and close 5". */
+  verb: z.string().min(1).max(24),
+  noun: z.string().min(1).max(24),
+  summary: z.string().max(400),
+  /** The exact items the change applies to; the user may untick them. */
+  items: z
+    .array(
+      z.object({
+        id: z.number().int().positive(),
+        title: z.string().max(256),
+        meta: z.string().max(80).optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
+  /** Requested items the dry run found nothing to do for, with the reason. */
+  skipped: z
+    .array(z.object({ id: z.number().int().positive(), reason: z.string().max(80) }))
+    .max(100)
+    .default([]),
+  effect: z.object({ from: z.string().max(40), to: z.string().max(40) }).optional(),
+  details: z
+    .array(z.object({ label: z.string().max(40), value: z.string().max(200), mono: z.boolean().default(false) }))
+    .max(8)
+    .default([]),
+  /** One API request per selected item: shown as a live count ("5 PATCH requests"). */
+  requestMethod: z.enum(['POST', 'PATCH', 'PUT', 'DELETE']).optional(),
+  reversible: z.boolean(),
+  undoHint: z.string().max(200).optional(),
+  status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
+  /** After a decision: the ids the user approved. */
+  selected: z.array(z.number().int().positive()).max(100).optional(),
+  /** After a decision: one line on what happened. */
+  result: z.string().max(400).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -216,6 +271,13 @@ export const catalog = {
     props: PrListProps,
     events: ['open'],
   },
+  ApprovalCard: {
+    group: 'agentic',
+    description: 'Dry-run preview of a change, with approve / reject. Built by the server only.',
+    internal: true,
+    props: ApprovalCardProps,
+    events: ['approve', 'reject', 'edit'],
+  },
   StepTimeline: {
     group: 'agentic',
     description: 'Progress of a multi-step task, rendered by the client from run events.',
@@ -242,6 +304,26 @@ export const componentNames = Object.keys(catalog) as ComponentName[];
 /** Own-property check, so names like "constructor" or "__proto__" never match. */
 export function isComponentName(name: string): name is ComponentName {
   return Object.hasOwn(catalog, name);
+}
+
+/**
+ * The first client- or server-only component (ApprovalCard, StepTimeline,
+ * ErrorFallback) anywhere in a node tree, including nested children. Used to
+ * stop the model from composing them itself, e.g. a fake approval card.
+ */
+export function findInternalComponent(node: unknown, depth = 0): ComponentName | null {
+  if (depth > 8 || !node || typeof node !== 'object') return null;
+  const { component, props } = node as { component?: unknown; props?: unknown };
+  if (typeof component === 'string' && isComponentName(component) && (catalog[component] as CatalogEntry).internal) {
+    return component;
+  }
+  const children = (props as { children?: unknown } | null)?.children;
+  if (!Array.isArray(children)) return null;
+  for (const child of children) {
+    const found = findInternalComponent(child, depth + 1);
+    if (found) return found;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

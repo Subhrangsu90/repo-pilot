@@ -1,5 +1,6 @@
 import { makeEnvironmentProviders } from '@angular/core';
 import { ActivityChart } from './components/activity-chart';
+import { ApprovalCard } from './components/approval-card';
 import { ContributorList } from './components/contributor-list';
 import { ErrorFallback } from './components/error-fallback';
 import { Grid } from './components/grid';
@@ -24,6 +25,7 @@ export const REGISTRY: GenUiRegistry = {
   ContributorList,
   PrCard,
   PrList,
+  ApprovalCard,
   StepTimeline,
   ErrorFallback,
 };

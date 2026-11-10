@@ -39,14 +39,33 @@ export type AgentEvent =
   | { type: 'TEXT_MESSAGE_CONTENT'; messageId: string; delta: string }
   | { type: 'TEXT_MESSAGE_END'; messageId: string }
   /** A validated UI node. Same surfaceId again = replace that surface in place. */
-  | { type: 'CUSTOM'; name: 'ui'; value: UiSurface };
+  | { type: 'CUSTOM'; name: 'ui'; value: UiSurface }
+  /** The run paused on an ApprovalCard; it resumes through POST /api/runs/:runId/actions. */
+  | { type: 'CUSTOM'; name: 'approval'; value: ApprovalRequest }
+  /** Follow-up prompts suggested from what the run showed; rendered as chips above the prompt box. */
+  | { type: 'CUSTOM'; name: 'followups'; value: { prompts: string[] } };
 
 export interface UiSurface {
   surfaceId: string;
   node: UiNode;
 }
 
+export interface ApprovalRequest {
+  /** The run that paused (the actions endpoint is keyed by it). */
+  runId: string;
+  toolCallId: string;
+  /** The ApprovalCard surface. */
+  surfaceId: string;
+}
+
 export type AgentEventType = AgentEvent['type'];
+
+/**
+ * Step id of a tool call. The client shows a placeholder of an agent surface
+ * while such a step runs, so the layout does not jump when the UI arrives.
+ */
+export const toolStepId = (runId: string, callId: string) => `${runId}-tool-${callId}`;
+export const isToolStepId = (stepId: string) => stepId.includes('-tool-');
 
 // ---------------------------------------------------------------------------
 // HTTP contract
@@ -66,4 +85,12 @@ export interface StartRunRequest {
 export interface StartRunResponse {
   runId: string;
   threadId: string;
+}
+
+/** POST /api/runs/:runId/actions — the user's decision on a paused run. Answered with a StartRunResponse. */
+export interface ApprovalAction {
+  toolCallId: string;
+  decision: 'approve' | 'reject';
+  /** Approve only: the item ids still ticked. Ids that were not in the dry run are ignored. */
+  selected?: number[];
 }

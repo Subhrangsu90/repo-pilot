@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import {
+  findInternalComponent,
   getRepoHealth,
   listIssues,
   listPullRequests,
@@ -31,9 +32,9 @@ export class ToolError extends Error {}
 export type Executor<S extends { input: z.ZodType }> = (input: z.output<S['input']>, ctx: ToolContext) => Promise<ToolOutput>;
 
 const DAY = 86_400_000;
-const ageDays = (iso: string, now = Date.now()) => Math.max(0, Math.floor((now - Date.parse(iso)) / DAY));
+export const ageDays = (iso: string, now = Date.now()) => Math.max(0, Math.floor((now - Date.parse(iso)) / DAY));
 
-function resolveRepo(repo: string | undefined, ctx: ToolContext): { owner: string; name: string; full: string } {
+export function resolveRepo(repo: string | undefined, ctx: ToolContext): { owner: string; name: string; full: string } {
   const full = repo ?? ctx.allowlist[0];
   if (!full) throw new ToolError('No repository configured (GITHUB_REPO_ALLOWLIST is empty).');
   const allowed = ctx.allowlist.find((r) => r.toLowerCase() === full.toLowerCase());
@@ -51,7 +52,7 @@ query ($owner: String!, $name: String!, $states: [PullRequestState!], $first: In
   repository(owner: $owner, name: $name) {
     pullRequests(states: $states, first: $first, orderBy: { field: UPDATED_AT, direction: DESC }) {
       nodes {
-        number title url state isDraft createdAt additions deletions
+        number title url state isDraft createdAt additions deletions headRefName
         author { login }
         labels(first: 10) { nodes { name } }
         reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } }
@@ -71,6 +72,7 @@ interface PrNode {
   createdAt: string;
   additions: number;
   deletions: number;
+  headRefName: string;
   author: { login: string } | null;
   labels: { nodes: { name: string }[] };
   reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
@@ -113,6 +115,7 @@ export const runListPullRequests: Executor<typeof listPullRequests> = async (inp
         number: pr.number,
         title: pr.title.slice(0, 256),
         author: prAuthor,
+        branch: pr.headRefName || undefined,
         state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : pr.isDraft ? 'draft' : 'open',
         ci: rollup ? (CI[rollup] ?? 'none') : 'none',
         reviewers: [...reviewers].slice(0, 10),
@@ -149,6 +152,7 @@ interface IssueJson {
   state: 'open' | 'closed';
   created_at: string;
   user: { login: string } | null;
+  assignees?: { login: string }[] | null;
   labels: { name: string }[];
   pull_request?: unknown;
 }
@@ -167,6 +171,7 @@ export const runListIssues: Executor<typeof listIssues> = async (input, ctx) => 
       state: i.state,
       labels: i.labels.map((l) => l.name).slice(0, 10),
       author: i.user?.login,
+      assignees: (i.assignees ?? []).map((a) => a.login).slice(0, 10),
       ageDays: ageDays(i.created_at),
     }))
     .filter((i) => input.olderThanDays === undefined || i.ageDays >= input.olderThanDays)
@@ -195,7 +200,7 @@ query ($owner: String!, $name: String!, $since: GitTimestamp!) {
     openPrs: pullRequests(states: OPEN, first: 50) { totalCount nodes { updatedAt } }
     openIssues: issues(states: OPEN) { totalCount }
     oldestIssues: issues(states: OPEN, first: 5, orderBy: { field: CREATED_AT, direction: ASC }) {
-      nodes { number title createdAt author { login } labels(first: 5) { nodes { name } } }
+      nodes { number title createdAt author { login } assignees(first: 10) { nodes { login } } labels(first: 5) { nodes { name } } }
     }
     defaultBranchRef {
       name
@@ -208,7 +213,16 @@ interface HealthData {
   repository: {
     openPrs: { totalCount: number; nodes: { updatedAt: string }[] };
     openIssues: { totalCount: number };
-    oldestIssues: { nodes: { number: number; title: string; createdAt: string; author: { login: string } | null; labels: { nodes: { name: string }[] } }[] };
+    oldestIssues: {
+      nodes: {
+        number: number;
+        title: string;
+        createdAt: string;
+        author: { login: string } | null;
+        assignees?: { nodes: { login: string }[] };
+        labels: { nodes: { name: string }[] };
+      }[];
+    };
     defaultBranchRef: {
       name: string;
       target: { history: { totalCount: number; nodes: { committedDate: string; author: { user: { login: string } | null } }[] } };
@@ -250,6 +264,7 @@ export const runGetRepoHealth: Executor<typeof getRepoHealth> = async (input, ct
     state: 'open' as const,
     labels: i.labels.nodes.map((l) => l.name),
     author: i.author?.login,
+    assignees: (i.assignees?.nodes ?? []).map((a) => a.login),
     ageDays: ageDays(i.createdAt, now),
   }));
 
@@ -314,6 +329,10 @@ export const runGetRepoHealth: Executor<typeof getRepoHealth> = async (input, ct
 // ---------------------------------------------------------------------------
 
 export const runRenderUi: Executor<typeof renderUi> = async (input) => {
+  // ApprovalCard, StepTimeline and ErrorFallback come from the app, never the model:
+  // a model-made approval card could look like a real one.
+  const internal = findInternalComponent(input.node);
+  if (internal) throw new ToolError(`${internal} is shown by the app itself and cannot be used in render_ui.`);
   const result = validateNode(input.node);
   if (!result.ok) throw new ToolError(`Invalid UI node, nothing was shown. ${result.error}`);
   return { data: { shown: true }, ui: input.node, detail: result.component };

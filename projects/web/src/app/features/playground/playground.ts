@@ -44,7 +44,7 @@ interface LoggedEvent extends UiEvent {
           <label class="flex flex-col gap-1.5">
             <span class="text-label text-fg-muted">Node JSON</span>
             <textarea
-              class="h-[28rem] resize-y rounded-md border border-border-strong bg-surface-2 p-3 font-mono text-[12px] leading-relaxed text-fg"
+              class="h-[28rem] resize-y rounded-md border border-border-strong bg-surface-2 p-3 font-mono text-caption leading-relaxed text-fg"
               spellcheck="false"
               [value]="source()"
               (input)="edit($event)"
@@ -62,13 +62,13 @@ interface LoggedEvent extends UiEvent {
             <div class="flex items-center justify-between">
               <h2 id="events-title" class="text-body font-semibold">Events sent to the agent</h2>
               @if (events().length) {
-                <button type="button" class="btn btn-ghost min-h-9 px-2 text-body-sm" (click)="events.set([])">Clear</button>
+                <button type="button" class="btn btn-ghost px-3 text-body-sm" (click)="events.set([])">Clear</button>
               }
             </div>
             @if (events().length === 0) {
               <p class="mt-2 text-body-sm text-fg-muted">Interact with a component (try "Selectable issues").</p>
             } @else {
-              <ol class="mt-2 flex max-h-48 flex-col gap-1 overflow-auto font-mono text-[12px]" aria-live="polite">
+              <ol class="mt-2 flex max-h-48 flex-col gap-1 overflow-auto font-mono text-caption" aria-live="polite">
                 @for (e of events(); track e.id) {
                   <li class="truncate">
                     <span class="text-fg-faint">{{ e.at }}</span>

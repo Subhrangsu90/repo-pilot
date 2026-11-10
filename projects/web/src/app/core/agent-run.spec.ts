@@ -5,6 +5,11 @@ const fold = (events: AgentEvent[]): Turn => events.reduce(applyEvent, newTurn('
 const prList = (title: string) => ({ component: 'PrList', props: { title, items: [] } });
 
 describe('applyEvent', () => {
+  it('keeps at most three follow-up prompts from the server', () => {
+    const turn = fold([{ type: 'CUSTOM', name: 'followups', value: { prompts: ['a', 'b', 'c', 'd'] } }]);
+    expect(turn.followups).toEqual(['a', 'b', 'c']);
+  });
+
   it('builds a turn from a full run', () => {
     const turn = fold([
       { type: 'RUN_STARTED', threadId: 'th', runId: 'r' },
@@ -52,6 +57,32 @@ describe('applyEvent', () => {
     ]);
     expect(turn).toMatchObject({ status: 'error', error: 'gemini: HTTP 503' });
     expect(turn.steps[0].status).toBe('error');
+  });
+
+  it('pauses on an approval and continues in the same turn when the resumed run streams in', () => {
+    const paused = fold([
+      { type: 'RUN_STARTED', threadId: 'th', runId: 'r1' },
+      { type: 'CUSTOM', name: 'ui', value: { surfaceId: 'r1-c1', node: { component: 'ApprovalCard', props: { status: 'pending' } } } },
+      { type: 'CUSTOM', name: 'approval', value: { runId: 'r1', toolCallId: 'c1', surfaceId: 'r1-c1' } },
+      { type: 'RUN_FINISHED', threadId: 'th', runId: 'r1' },
+    ]);
+    expect(paused.status).toBe('awaiting-approval');
+    expect(paused.pending).toEqual({ runId: 'r1', toolCallId: 'c1', surfaceId: 'r1-c1' });
+    // Settling the run must not mark the wait as done.
+    expect(paused.steps).toEqual([{ id: 'approval-c1', label: 'Waiting for your approval', status: 'pending' }]);
+
+    // The session clears `pending` when it sends the decision; then the resumed run arrives.
+    const resumed: AgentEvent[] = [
+      { type: 'RUN_STARTED', threadId: 'th', runId: 'r2' },
+      { type: 'STEP_FINISHED', stepId: 'approval-c1', status: 'done', detail: 'Approved 5' },
+      { type: 'CUSTOM', name: 'ui', value: { surfaceId: 'r1-c1', node: { component: 'ApprovalCard', props: { status: 'approved' } } } },
+      { type: 'RUN_FINISHED', threadId: 'th', runId: 'r2' },
+    ];
+    const done = resumed.reduce(applyEvent, { ...paused, status: 'running', pending: undefined } as Turn);
+    expect(done.status).toBe('done');
+    expect(done.steps[0]).toMatchObject({ status: 'done', detail: 'Approved 5' });
+    expect(done.surfaces).toHaveLength(1);
+    expect(done.surfaces[0].node.props).toEqual({ status: 'approved' });
   });
 
   it('shows a finish event without a start as a notice (model fallback)', () => {

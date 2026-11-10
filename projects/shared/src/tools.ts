@@ -76,7 +76,32 @@ export const renderUi = {
   input: z.object({ node: UiNodeSchema }),
 } as const satisfies ToolSpec;
 
-export const toolSpecs = [listPullRequests, listIssues, getRepoHealth, renderUi] as const;
+/**
+ * Destructive. The model only says what it wants; the server runs the dry run,
+ * shows an ApprovalCard, and executes only what the user approves. There is
+ * deliberately no `dryRun` input: the model cannot skip the preview.
+ */
+export const bulkUpdateIssues = {
+  name: 'bulk_update_issues',
+  risk: 'destructive',
+  label: 'Updating issues',
+  description:
+    'Close or reopen up to 100 issues by number. Use for bulk changes such as "close all wontfix issues": first ' +
+    'call list_issues to find the numbers, then call this once with all of them. The app runs a dry run and shows ' +
+    'the user an approval card listing every issue; nothing changes until they approve, and they may untick items. ' +
+    'Do not ask for confirmation in text. Only claim a change happened when the tool result says so.',
+  input: z.object({
+    repo: repoRef,
+    issueNumbers: z.array(z.number().int().positive()).min(1).max(100),
+    action: z.enum(['close', 'reopen']),
+    reason: z
+      .enum(['not_planned', 'completed'])
+      .default('not_planned')
+      .describe('Why the issues are closed. Ignored when reopening.'),
+  }),
+} as const satisfies ToolSpec;
+
+export const toolSpecs = [listPullRequests, listIssues, getRepoHealth, renderUi, bulkUpdateIssues] as const;
 
 export type ToolName = (typeof toolSpecs)[number]['name'];
 

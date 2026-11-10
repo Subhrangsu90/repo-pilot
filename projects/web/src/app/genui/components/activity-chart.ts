@@ -15,7 +15,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
     <figure class="card flex h-full flex-col gap-4 p-5">
       <figcaption class="flex items-baseline justify-between gap-2">
         <span class="text-body font-semibold">{{ props().title }}</span>
-        <span class="text-body-sm text-fg-faint">{{ g.points.length }} points</span>
+        <span class="text-body-sm text-fg-faint">{{ g.range }}</span>
       </figcaption>
 
       <div role="img" [attr.aria-label]="g.summary">
@@ -46,7 +46,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
         </svg>
       </div>
 
-      <div class="flex justify-between font-mono text-[11px] text-fg-faint" aria-hidden="true">
+      <div class="flex justify-between font-mono text-axis text-fg-faint" aria-hidden="true">
         @for (label of g.axis; track $index) {
           <span>{{ label }}</span>
         }
@@ -77,6 +77,8 @@ export class ActivityChart {
     const summary = raw.length
       ? `${title}: ${raw.length} points, peaking at ${max} in ${raw[peak].label}`
       : `${title}: no data`;
-    return { points, line, peak, axis, summary };
+    // The period covered, e.g. "W1 – W12" or "2026-08-17 – 2026-11-09".
+    const range = raw.length > 1 ? `${raw[0].label} – ${raw.at(-1)!.label}` : (raw[0]?.label ?? '');
+    return { points, line, peak, axis, summary, range };
   });
 }

@@ -4,7 +4,15 @@ import { Theme } from '../../core/theme';
 import { Icon } from '../../shared/ui/icon';
 import { Logo } from '../../shared/ui/logo';
 
-const SUGGESTIONS = ['Show my open PRs', 'Give me a health report of the repo', 'List wontfix issues'];
+/** Screen Spec hero chips (PR number from the real demo repo: #15 is the one with planted review bugs). */
+const SUGGESTIONS = ['Show my open PRs', 'Review PR #15', 'Draft release v1.2.0'];
+
+/**
+ * The hero prompt starts filled in (Screen Spec). The spec's "older than 90 days"
+ * matches nothing in the demo repo (its issues are days old), so this is the
+ * version that reaches the approval card.
+ */
+const APPROVAL_PROMPT = 'Close all open wontfix issues';
 
 const STEPS = [
   { label: 'Read open issues labelled wontfix', state: 'done' },
@@ -62,21 +70,22 @@ const HOW = [
           >
             <app-icon [name]="theme.current() === 'graphite' ? 'sun' : 'moon'" />
           </button>
-          <a routerLink="/ask" class="btn">Open app</a>
+          <!-- Goes straight to Ask until GitHub sign-in exists (week 4). -->
+          <a routerLink="/ask" class="btn">Sign in</a>
         </nav>
       </header>
 
       <main id="main">
-        <section class="flex flex-wrap items-center gap-14 pt-12 pb-24 sm:pt-18">
-          <div class="flex min-w-0 flex-[1_1_480px] flex-col gap-7">
+        <section class="flex flex-wrap items-center gap-12 py-12">
+          <div class="flex min-w-0 flex-[1_1_480px] flex-col gap-6">
             <span class="inline-flex items-center gap-2 self-start rounded-full border border-border-strong px-3 py-1.5 text-body-sm text-fg-muted">
-              <span class="size-2 rounded-full bg-success" aria-hidden="true"></span>
+              <span class="size-1.5 rounded-full bg-fg" aria-hidden="true"></span>
               Generative UI · Agentic UI · Built with Angular
             </span>
-            <h1 class="font-display text-[44px] leading-[1.04] font-bold tracking-[-0.03em] sm:text-[68px]">
+            <h1 class="font-display text-h1 sm:text-display">
               GitHub, in <span class="text-fg-faint">plain English.</span>
             </h1>
-            <p class="max-w-[540px] text-[19px] leading-relaxed text-fg-muted">
+            <p class="max-w-[540px] text-body text-fg-muted">
               Ask for what you want. RepoPilot answers with real, interactive components (dashboards, diffs, editable
               drafts) and never changes your repo until you approve.
             </p>
@@ -88,7 +97,7 @@ const HOW = [
                   #box
                   id="hero-ask"
                   class="field h-12 min-w-0 flex-1 bg-bg"
-                  placeholder="Show my open PRs"
+                  placeholder="Ask anything about this repo…"
                   [value]="draft()"
                   (input)="draft.set(box.value)"
                 />
@@ -104,10 +113,8 @@ const HOW = [
             </form>
 
             <div class="flex flex-wrap items-center gap-3">
-              <a routerLink="/ask" class="btn btn-primary min-h-13 rounded-[12px] px-5.5 text-base">
-                Start asking <app-icon name="arrow-right" />
-              </a>
-              <a href="#how" class="btn min-h-13 rounded-[12px] px-5.5 text-base">See how it works</a>
+              <a routerLink="/ask" class="btn btn-primary">Sign in with GitHub</a>
+              <a routerLink="/ask" [queryParams]="{ q: approvalPrompt }" class="btn">See an approval flow</a>
             </div>
             <p class="text-body-sm text-fg-faint">Your token stays on the server. Every change waits for your approval.</p>
           </div>
@@ -122,7 +129,7 @@ const HOW = [
                 <span class="font-mono text-body-sm text-fg-faint">agent run · 4 steps</span>
                 <span class="badge badge-write">Running</span>
               </div>
-              <ol class="flex flex-col gap-3 text-[14px]">
+              <ol class="flex flex-col gap-3 text-body-md">
                 @for (s of steps; track s.label) {
                   <li class="flex items-center gap-3" [class.text-fg-muted]="s.state === 'pending'">
                     @switch (s.state) {
@@ -144,22 +151,16 @@ const HOW = [
               </ol>
             </div>
 
-            <div class="flex flex-col gap-3.5 rounded-lg border border-risk bg-surface-1 p-5" aria-hidden="true">
+            <!-- inert: real design-system checkboxes, drawn but not interactive or focusable. -->
+            <div class="flex flex-col gap-4 rounded-xl border border-risk bg-surface-1 p-6" aria-hidden="true" inert>
               <div class="flex items-center justify-between gap-3">
-                <span class="font-display text-lg font-semibold">Close 2 stale issues</span>
+                <span class="font-display text-h2">Close 2 stale issues</span>
                 <span class="badge badge-risk">Destructive · dry run</span>
               </div>
-              <ul class="flex flex-col gap-2 text-[14px]">
+              <ul class="flex flex-col gap-2 text-body-md">
                 @for (i of previewIssues; track i.n) {
                   <li class="flex min-h-8 items-center gap-2.5" [class.text-fg-muted]="!i.on">
-                    <span
-                      class="grid size-[18px] place-items-center rounded-[4px] border"
-                      [class]="i.on ? 'border-risk bg-risk text-on-risk' : 'border-border-strong'"
-                    >
-                      @if (i.on) {
-                        <app-icon name="check" [size]="12" [stroke]="3.5" />
-                      }
-                    </span>
+                    <input type="checkbox" class="checkbox checkbox-risk" tabindex="-1" [checked]="i.on" />
                     <span class="font-mono text-fg-faint">#{{ i.n }}</span>
                     {{ i.title }}
                   </li>
@@ -173,36 +174,36 @@ const HOW = [
           </figure>
         </section>
 
-        <section id="how" class="flex scroll-mt-6 flex-col gap-10 border-t border-border py-18">
+        <section id="how" class="flex scroll-mt-6 flex-col gap-6 border-t border-border py-12">
           <div class="flex max-w-[640px] flex-col gap-3">
             <span class="font-mono text-body-sm">How it works</span>
-            <h2 class="font-display text-[34px] leading-tight font-semibold tracking-[-0.02em] sm:text-[42px]">
+            <h2 class="font-display text-h1">
               Ask. See real UI. Approve.
             </h2>
           </div>
-          <div class="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-5">
+          <div class="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
             @for (h of how; track h.n) {
-              <div class="flex flex-col gap-3 rounded-lg border border-border bg-surface-1 p-7">
-                <span class="font-display text-[40px] font-bold text-fg-faint" aria-hidden="true">{{ h.n }}</span>
-                <h3 class="font-display text-xl font-semibold">{{ h.title }}</h3>
+              <div class="flex flex-col gap-3 rounded-lg border border-border bg-surface-1 p-6">
+                <span class="font-display text-stat text-fg-faint" aria-hidden="true">{{ h.n }}</span>
+                <h3 class="font-display text-h2">{{ h.title }}</h3>
                 <p class="text-body text-fg-muted">{{ h.text }}</p>
               </div>
             }
           </div>
         </section>
 
-        <section id="patterns" class="flex scroll-mt-6 flex-col gap-10 border-t border-border py-18">
+        <section id="patterns" class="flex scroll-mt-6 flex-col gap-6 border-t border-border py-12">
           <div class="flex max-w-[680px] flex-col gap-3">
             <span class="font-mono text-body-sm">Six patterns, one app</span>
-            <h2 class="font-display text-[34px] leading-tight font-semibold tracking-[-0.02em] sm:text-[42px]">
+            <h2 class="font-display text-h1">
               Every Generative and Agentic UI pattern, in context.
             </h2>
           </div>
-          <ul class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4">
+          <ul class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3">
             @for (p of patterns; track p.title) {
               <li class="flex flex-col gap-2.5 rounded-lg border border-border p-6">
-                <h3 class="text-[17px] font-semibold">{{ p.title }}</h3>
-                <p class="text-[14px] text-fg-muted">{{ p.text }}</p>
+                <h3 class="text-body font-semibold">{{ p.title }}</h3>
+                <p class="text-body-sm text-fg-muted">{{ p.text }}</p>
                 <code class="font-mono text-body-sm text-fg-muted">"{{ p.prompt }}"</code>
               </li>
             }
@@ -210,8 +211,8 @@ const HOW = [
         </section>
       </main>
 
-      <footer class="flex flex-wrap justify-between gap-4 border-t border-border pt-10 pb-14 text-body-sm text-fg-faint">
-        <span>RepoPilot, a Generative UI proof of concept</span>
+      <footer class="flex flex-wrap justify-between gap-4 border-t border-border py-12 text-body-sm text-fg-faint">
+        <span>RepoPilot — a Generative UI proof of concept</span>
         <span class="font-mono">Angular · AG-UI · A2UI · GitHub API</span>
       </footer>
     </div>
@@ -220,7 +221,8 @@ const HOW = [
 export class Landing {
   private readonly router = inject(Router);
   protected readonly theme = inject(Theme);
-  protected readonly draft = signal('');
+  protected readonly approvalPrompt = APPROVAL_PROMPT;
+  protected readonly draft = signal(APPROVAL_PROMPT);
   protected readonly suggestions = SUGGESTIONS;
   protected readonly steps = STEPS;
   protected readonly previewIssues = PREVIEW_ISSUES;
