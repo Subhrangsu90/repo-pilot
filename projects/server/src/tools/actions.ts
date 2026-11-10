@@ -4,6 +4,7 @@ import { GitHubError } from '../github/client';
 import { commentableLines, fetchPullRequest } from '../github/pulls';
 import { fetchReleaseChanges, renderNotes, tagExists } from '../github/releases';
 import { ageDays, resolveRepo, ToolContext, ToolError } from './read-tools';
+import type { Inverse } from './undo';
 
 /**
  * Write and destructive tools. Each has two halves:
@@ -62,6 +63,10 @@ export interface ActionTool<S extends { input: z.ZodType }> {
   /** The surface fields that show the user's edits while (and after) the change runs. */
   editedCard?(card: Record<string, unknown>, edits: unknown): Record<string, unknown>;
   execute(input: z.output<S['input']>, ids: number[], ctx: ToolContext, opts: ExecuteOptions): Promise<Outcome>;
+  /** One line for the audit log: "Close 5 issues", "Release v1.1.0". */
+  summary(input: z.output<S['input']>, ids: number[], opts: ExecuteOptions): string;
+  /** How to reverse an executed change, or null when it cannot be undone from here. */
+  inverse?(input: z.output<S['input']>, ids: number[], out: Outcome, opts: ExecuteOptions): Inverse | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +178,21 @@ export const bulkUpdateIssuesTool: ActionTool<typeof bulkUpdateIssues> = {
       data: { repo: repo.full, action: input.action, changed, failed },
       result: result.slice(0, 400),
       detail: failed.length ? `${changed.length} done, ${failed.length} failed` : `${changed.length} ${input.action === 'close' ? 'closed' : 'reopened'}`,
+    };
+  },
+
+  summary(input, ids) {
+    return `${input.action === 'close' ? 'Close' : 'Reopen'} ${ids.length} ${ids.length === 1 ? 'issue' : 'issues'}`;
+  },
+
+  inverse(input, _ids, out) {
+    const changed = (out.data['changed'] as number[] | undefined) ?? [];
+    if (!changed.length) return null;
+    const action = input.action === 'close' ? 'reopen' : 'close';
+    return {
+      kind: 'issues',
+      label: `${action === 'reopen' ? 'Reopen' : 'Close'} ${changed.map((n) => `#${n}`).join(', ')}`.slice(0, 200),
+      input: { ...(input.repo ? { repo: input.repo } : {}), issueNumbers: changed, action, reason: input.reason },
     };
   },
 };
@@ -303,6 +323,13 @@ export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestRev
       patch: GITHUB_URL.test(review.html_url) ? { reviewUrl: review.html_url } : {},
     };
   },
+
+  summary(input) {
+    return `Review on PR #${input.number}`;
+  },
+
+  // A posted review cannot be deleted through the API (only dismissed, by admins, and not comment reviews).
+  inverse: () => null,
 };
 
 // ---------------------------------------------------------------------------
@@ -396,11 +423,22 @@ export const createReleaseTool: ActionTool<typeof createRelease> = {
 
     return {
       ok: true,
-      data: { published: true, tag: e.tag, name: e.name, prerelease: e.prerelease },
+      data: { published: true, releaseId: release.id, tag: e.tag, name: e.name, prerelease: e.prerelease },
       result: `Published ${e.tag} — ${e.name}.`,
       detail: `published ${e.tag}`,
       patch: GITHUB_URL.test(release.html_url) ? { releaseUrl: release.html_url } : {},
     };
+  },
+
+  summary(input, _ids, { edits }) {
+    return `Release ${(edits as ReleaseEdits | undefined)?.tag ?? input.tag}`;
+  },
+
+  inverse(input, _ids, out) {
+    const releaseId = out.data['releaseId'];
+    const tag = out.data['tag'];
+    if (typeof releaseId !== 'number' || typeof tag !== 'string') return null;
+    return { kind: 'release', label: `Delete release ${tag} and its tag`, repo: input.repo ?? '', releaseId, tag };
   },
 };
 

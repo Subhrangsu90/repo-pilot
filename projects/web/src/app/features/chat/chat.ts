@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { isToolStepId, type EmitFn } from '@repopilot/shared';
 import type { Turn } from '../../core/agent-run';
 import { AgentSession } from '../../core/agent-session';
+import { formatWhen } from '../../core/api';
 import { ServerStatus } from '../../core/server-status';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
@@ -61,6 +62,16 @@ function componentOf(node: unknown): string {
           <h1 class="font-display text-h1">What do you want to know about your repo?</h1>
           <p class="text-body text-fg-muted">Ask in plain English. Answers come back as live UI built from real GitHub data.</p>
         </div>
+      }
+
+      @if (session.reopened(); as r) {
+        <p class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-1 px-4 py-3 text-body-sm text-fg-muted" role="status">
+          <app-icon name="history" [size]="16" />
+          Reopened “{{ r.title }}” from History. Data as captured {{ when(r.capturedAt) }}; ask again for fresh data.
+        </p>
+      }
+      @if (session.loadError(); as e) {
+        <p class="card border-danger p-4 text-body-sm" role="alert">Could not reopen the session: {{ e }}</p>
       }
 
       <ol class="flex flex-col gap-8" aria-label="Conversation" aria-live="polite">
@@ -180,6 +191,9 @@ export class Chat implements OnInit {
 
   /** Prompt handed over from the landing page (`/ask?q=…`). */
   readonly q = input<string>();
+  /** A saved session to reopen (`/ask?session=<id>`, from History). */
+  readonly sessionParam = input<string>(undefined, { alias: 'session' });
+  protected readonly when = formatWhen;
 
   /** User actions inside rendered components; approvals resume the paused run. */
   protected readonly onEmit: EmitFn = this.session.handleUiEvent;
@@ -214,6 +228,11 @@ export class Chat implements OnInit {
   }
 
   ngOnInit() {
+    const id = this.sessionParam();
+    if (id && /^[0-9a-f-]{36}$/i.test(id)) {
+      if (this.session.sessionId !== id) void this.session.load(id);
+      return;
+    }
     const q = this.q()?.trim();
     if (!q) return;
     // Drop the query so a reload does not ask again.
@@ -239,5 +258,6 @@ export class Chat implements OnInit {
 
   protected newChat() {
     this.session.reset();
+    void this.router.navigate([], { queryParams: {}, replaceUrl: true });
   }
 }

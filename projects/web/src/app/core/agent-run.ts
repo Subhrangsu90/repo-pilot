@@ -82,6 +82,25 @@ export function applyEvent(turn: Turn, event: AgentEvent): Turn {
   }
 }
 
+/**
+ * Rebuilds a saved conversation from its stored runs (History → Resume). A run
+ * with a prompt starts a turn; a run without one resumed after an approval and
+ * continues the previous turn, exactly as it streamed live.
+ */
+export function replayRuns(runs: { id: string; prompt: string | null; events: AgentEvent[] }[]): Turn[] {
+  const turns: Turn[] = [];
+  for (const run of runs) {
+    if (run.prompt !== null || turns.length === 0) {
+      turns.push(newTurn(run.id, run.prompt ?? ''));
+    } else {
+      // The approval was answered: the client cleared `pending` before streaming the resumed run.
+      turns[turns.length - 1] = { ...turns[turns.length - 1], pending: undefined, status: 'running' };
+    }
+    turns[turns.length - 1] = run.events.reduce(applyEvent, turns[turns.length - 1]);
+  }
+  return turns;
+}
+
 function settle(steps: Step[], status: 'done' | 'error'): Step[] {
   return steps.map((s) => (s.status === 'running' ? { ...s, status } : s));
 }

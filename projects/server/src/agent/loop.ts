@@ -1,6 +1,7 @@
 import { AgentEvent, getToolSpec, needsApproval, PropsOf, toolStepId, validateNode } from '@repopilot/shared';
 import type { ChatMessage, LlmProvider, LlmToolDef, ToolCall, ToolResult } from '../llm';
 import type { ActionTool } from '../tools/actions';
+import type { Inverse } from '../tools/undo';
 import { Executor, ToolContext, ToolError } from '../tools/read-tools';
 
 export interface AgentDeps {
@@ -16,6 +17,25 @@ export interface AgentDeps {
   runId: string;
   maxIterations?: number;
   signal?: AbortSignal;
+  /** Called once per executed (or failed) approved change: the audit log. Errors are swallowed. */
+  onExecuted?: (change: ExecutedChange) => Promise<void> | void;
+}
+
+/** An approved change after it ran, for the audit log. */
+export interface ExecutedChange {
+  runId: string;
+  tool: string;
+  risk: 'write' | 'destructive';
+  summary: string;
+  prompt?: string;
+  input: unknown;
+  edits?: unknown;
+  approvedIds: number[];
+  keptByUser: number[];
+  ok: boolean;
+  result: string;
+  response?: unknown;
+  inverse: Inverse | null;
 }
 
 /** The surfaces a paused change can show; both carry status / selected / result. */
@@ -40,6 +60,8 @@ export interface PendingApproval {
   card: CardProps;
   /** Results for every call of the paused model turn; this call's slot is filled on resume. */
   results: ToolResult[];
+  /** The user prompt that led here (for the audit log). Set by the caller. */
+  prompt?: string;
 }
 
 export type AgentOutcome = { status: 'done' } | { status: 'awaiting-approval'; pending: PendingApproval };
@@ -282,16 +304,40 @@ async function carryOut(pending: PendingApproval, decision: Decision, deps: Agen
   const spec = getToolSpec(pending.tool);
   const stepId = `${deps.runId}-exec-${pending.callId}`;
   emit({ type: 'STEP_STARTED', stepId, stepName: spec?.label ?? pending.tool });
+  const opts = { edits, carry: pending.carry };
+  const deselected = pending.ids.filter((id) => !ids.includes(id));
+  // Every approved change is recorded, whether it worked or not. A logging failure never undoes the run.
+  const audit = async (fields: Pick<ExecutedChange, 'ok' | 'result' | 'response' | 'inverse'>) => {
+    if (!deps.onExecuted || !action) return;
+    try {
+      await deps.onExecuted({
+        runId: deps.runId,
+        tool: pending.tool,
+        risk: spec?.risk === 'destructive' ? 'destructive' : 'write',
+        summary: action.summary(pending.input, ids, opts),
+        prompt: pending.prompt,
+        input: pending.input,
+        edits,
+        approvedIds: ids,
+        keptByUser: deselected,
+        ...fields,
+      });
+    } catch {
+      // The store logs its own errors.
+    }
+  };
+
   try {
     if (!action) throw new ToolError(`Unknown tool "${pending.tool}".`);
-    const out = await action.execute(pending.input, ids, deps.ctx, { edits, carry: pending.carry });
+    const out = await action.execute(pending.input, ids, deps.ctx, opts);
     shownCard = { ...shownCard, ...out.patch };
     update({ status: out.ok ? 'approved' : 'failed', selected: ids, result: out.result });
     emit({ type: 'STEP_FINISHED', stepId, status: out.ok ? 'done' : 'error', detail: out.detail });
-    const deselected = pending.ids.filter((id) => !ids.includes(id));
+    await audit({ ok: out.ok, result: out.result, response: out.data, inverse: action.inverse?.(pending.input, ids, out, opts) ?? null });
     return { ...out.data, ...(deselected.length ? { keptByUser: deselected } : {}) };
   } catch (err) {
     const message = err instanceof ToolError ? err.message : `The change failed: ${(err as Error).message}`;
+    await audit({ ok: false, result: message.slice(0, 400), inverse: null });
     update({ status: 'failed', selected: ids, result: message.slice(0, 400) });
     emit({ type: 'STEP_FINISHED', stepId, status: 'error', detail: message.slice(0, 200) });
     return { error: message };

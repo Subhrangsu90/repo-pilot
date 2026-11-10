@@ -2,7 +2,8 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent } from '@repopilot/shared';
 import { firstValueFrom } from 'rxjs';
-import { applyEvent, newTurn, Turn } from './agent-run';
+import type { SavedSession } from './api';
+import { applyEvent, newTurn, replayRuns, Turn } from './agent-run';
 import { ModelChoice } from './model-choice';
 
 /**
@@ -29,6 +30,32 @@ export class AgentSession {
   readonly draft = signal('');
   /** Bumped when the prompt box should take focus. */
   readonly composerFocus = signal(0);
+  /** Set when the conversation was reopened from History: its data is as it was then. */
+  readonly reopened = signal<{ id: string; title: string; capturedAt: string } | null>(null);
+  readonly loadError = signal<string | null>(null);
+
+  /** The saved session this conversation belongs to (its thread id), once the server has one. */
+  get sessionId(): string | undefined {
+    return this.threadId;
+  }
+
+  /**
+   * Reopens a saved session: replays its stored runs, no model call. New prompts
+   * continue it, and a change that was waiting can still be approved.
+   */
+  async load(sessionId: string): Promise<boolean> {
+    this.reset();
+    try {
+      const saved = await firstValueFrom(this.http.get<SavedSession>(`/api/sessions/${encodeURIComponent(sessionId)}`));
+      this.threadId = saved.id;
+      this.turns.set(replayRuns(saved.runs));
+      this.reopened.set({ id: saved.id, title: saved.title, capturedAt: saved.updatedAt });
+      return true;
+    } catch (err) {
+      this.loadError.set(errorMessage(err));
+      return false;
+    }
+  }
 
   async send(prompt: string): Promise<void> {
     const text = prompt.trim();
@@ -143,6 +170,8 @@ export class AgentSession {
   /** Start a fresh conversation. */
   reset(): void {
     this.queued = undefined;
+    this.reopened.set(null);
+    this.loadError.set(null);
     this.source?.close();
     this.source = undefined;
     this.threadId = undefined;

@@ -1,5 +1,6 @@
 import type { AgentEvent } from '@repopilot/shared';
-import { applyEvent, newTurn, Turn } from './agent-run';
+import { applyEvent, newTurn, replayRuns, Turn } from './agent-run';
+import { dayDiff, formatWhen } from './api';
 
 const fold = (events: AgentEvent[]): Turn => events.reduce(applyEvent, newTurn('t1', 'Show my open PRs'));
 const prList = (title: string) => ({ component: 'PrList', props: { title, items: [] } });
@@ -88,5 +89,53 @@ describe('applyEvent', () => {
   it('shows a finish event without a start as a notice (model fallback)', () => {
     const turn = fold([{ type: 'STEP_FINISHED', stepId: 'f', status: 'error', detail: 'overloaded; trying fallback' }]);
     expect(turn.steps).toEqual([{ id: 'f', label: 'Notice', status: 'error', detail: 'overloaded; trying fallback' }]);
+  });
+});
+
+describe('replayRuns (History → Resume)', () => {
+  const card = { component: 'ApprovalCard', props: {} };
+  const paused = {
+    id: 'r1',
+    prompt: 'Close all wontfix issues',
+    events: [
+      { type: 'CUSTOM', name: 'ui', value: { surfaceId: 's1', node: card } },
+      { type: 'CUSTOM', name: 'approval', value: { runId: 'r1', toolCallId: 'c1', surfaceId: 's1' } },
+      { type: 'RUN_FINISHED', threadId: 't', runId: 'r1' },
+    ] as AgentEvent[],
+  };
+
+  it('restores a change that is still waiting, so it can be approved after a reload', () => {
+    const [turn] = replayRuns([paused]);
+    expect(turn).toMatchObject({ prompt: 'Close all wontfix issues', status: 'awaiting-approval', pending: { runId: 'r1', toolCallId: 'c1' } });
+  });
+
+  it('continues the same turn with the run that resumed after the approval, and starts a new turn per prompt', () => {
+    const resumed = {
+      id: 'r2',
+      prompt: null,
+      events: [
+        { type: 'STEP_FINISHED', stepId: 'approval-c1', status: 'done', detail: 'Approved 2' },
+        { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'Closed 2 issues.' },
+        { type: 'RUN_FINISHED', threadId: 't', runId: 'r2' },
+      ] as AgentEvent[],
+    };
+    const next = { id: 'r3', prompt: 'Show my open PRs', events: [{ type: 'RUN_FINISHED', threadId: 't', runId: 'r3' }] as AgentEvent[] };
+    const turns = replayRuns([paused, resumed, next]);
+    expect(turns.map((t) => [t.prompt, t.status, t.pending])).toEqual([
+      ['Close all wontfix issues', 'done', undefined],
+      ['Show my open PRs', 'done', undefined],
+    ]);
+    expect(turns[0].text).toBe('Closed 2 issues.');
+    expect(turns[0].steps.find((s) => s.id === 'approval-c1')?.status).toBe('done');
+  });
+});
+
+describe('formatWhen', () => {
+  const now = new Date(2026, 10, 11, 18, 0);
+  it('says Today, Yesterday or the date, with the time', () => {
+    expect(formatWhen(new Date(2026, 10, 11, 16, 12).toISOString(), now)).toBe('Today, 16:12');
+    expect(formatWhen(new Date(2026, 10, 10, 18, 30).toISOString(), now)).toBe('Yesterday, 18:30');
+    expect(formatWhen(new Date(2026, 10, 8, 17, 48).toISOString(), now)).toBe('8 Nov, 17:48');
+    expect(dayDiff(new Date(2026, 10, 1), now)).toBe(10);
   });
 });

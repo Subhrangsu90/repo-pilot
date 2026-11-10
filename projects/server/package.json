@@ -9,16 +9,21 @@
     "start": "tsx src/index.ts",
     "check": "tsx src/check-env.ts",
     "seed:demo": "tsx src/seed-demo.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@repopilot/shared": "*",
+    "drizzle-orm": "^0.45.4",
     "fastify": "^5.6.0",
+    "postgres": "^4.1.0",
     "zod": "^4.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.31.11",
     "tsx": "^4.20.0",
     "typescript": "~6.0.2",
     "vitest": "^4.0.8"

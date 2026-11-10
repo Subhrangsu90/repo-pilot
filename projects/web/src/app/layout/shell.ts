@@ -29,8 +29,8 @@ const NAV: NavItem[] = [
   { label: 'Pull requests', icon: 'pull-request', path: '/pulls', count: 'pulls' },
   { label: 'Issues', icon: 'issue', count: 'issues' },
   { label: 'Releases', icon: 'release', path: '/releases' },
-  { label: 'History', icon: 'history' },
-  { label: 'Audit log', icon: 'audit' },
+  { label: 'History', icon: 'history', path: '/history' },
+  { label: 'Audit log', icon: 'audit', path: '/audit' },
 ];
 
 const MODELS: { value: ModelOption; label: string }[] = [

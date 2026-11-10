@@ -5,7 +5,21 @@ import { config, type Config } from './config';
 import { trackFollowups } from './agent/followups';
 import { resumeAgent, runAgent, type AgentDeps } from './agent/loop';
 import { buildSystemPrompt, buildToolDefs } from './agent/prompt';
-import { findPendingByRun, getThread, isTerminal, startRun, subscribe, ThreadBusyError } from './agent/runs';
+import {
+  dropThread,
+  findPendingByRun,
+  getThread,
+  isTerminal,
+  onRunFinished,
+  restoreThread,
+  startRun,
+  subscribe,
+  ThreadBusyError,
+} from './agent/runs';
+import { openDb } from './db/client';
+import { registerAuditRoutes } from './routes/audit';
+import { registerSessionRoutes } from './routes/sessions';
+import { Store } from './store';
 import { GitHub } from './github/client';
 import { createProvider } from './llm';
 import { fetchPullRequest } from './github/pulls';
@@ -16,6 +30,37 @@ const app = Fastify({ logger: { level: 'info' } });
 const github = new GitHub(config.GITHUB_TOKEN ?? '');
 const toolCtx: ToolContext = { github, allowlist: config.GITHUB_REPO_ALLOWLIST };
 const toolDefs = buildToolDefs();
+
+/** Postgres (sessions, runs, audit log). Without it the server still runs, in memory only. */
+async function connectStore(): Promise<Store | null> {
+  if (!config.DATABASE_URL) {
+    app.log.warn('DATABASE_URL is not set: sessions and the audit log stay in memory only.');
+    return null;
+  }
+  try {
+    const { db } = await openDb(config.DATABASE_URL);
+    app.log.info('Postgres connected; migrations applied.');
+    return new Store(db, { login: () => github.login(), repo: config.GITHUB_REPO_ALLOWLIST[0] ?? '' }, (msg, err) =>
+      app.log.error({ err: (err as Error).message }, msg),
+    );
+  } catch (err) {
+    app.log.error({ err: (err as Error).message }, 'Postgres is not reachable; running without it. Start it with npm run db:up.');
+    return null;
+  }
+}
+
+const store = await connectStore();
+if (store) onRunFinished((run, thread) => void store.saveRun(run, thread));
+
+/** Brings a conversation back from the database when it is not in memory (e.g. after a restart). */
+async function ensureThread(id: string | undefined) {
+  if (!id || getThread(id) || !store) return;
+  const data = await store.loadThread(id).catch(() => null);
+  if (data) restoreThread(data);
+}
+
+registerSessionRoutes(app, store, { onDelete: dropThread });
+registerAuditRoutes(app, store, toolCtx);
 
 /** Liveness plus a quick view of what is configured (never the secrets). */
 app.get('/api/health', async () => ({
@@ -115,7 +160,12 @@ function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
   return config.LLM_PROVIDER;
 }
 
-function agentDeps(model: ModelOption | undefined, emit: (e: AgentEvent) => void, run: { id: string; signal: AbortSignal }): AgentDeps {
+function agentDeps(
+  threadId: string,
+  model: ModelOption | undefined,
+  emit: (e: AgentEvent) => void,
+  run: { id: string; signal: AbortSignal },
+): AgentDeps {
   const provider = createProvider({ ...config, LLM_PROVIDER: providerFor(model) }, (err) =>
     emit({ type: 'STEP_FINISHED', stepId: `${run.id}-fallback`, status: 'error', detail: `${err.message}; trying ${config.GEMINI_FALLBACK_MODEL}` }),
   );
@@ -129,6 +179,7 @@ function agentDeps(model: ModelOption | undefined, emit: (e: AgentEvent) => void
     emit,
     runId: run.id,
     signal: run.signal,
+    onExecuted: store ? async (change) => void (await store.recordAudit(threadId, change)) : undefined,
   };
 }
 
@@ -138,6 +189,7 @@ app.post('/api/runs', async (req, reply) => {
     return reply.code(400).send({ error: "Send { prompt: string, threadId?: uuid, model?: 'cloud' | 'local' }." });
   }
   if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set in projects/server/.env.' });
+  await ensureThread(parsed.data.threadId);
   if (getThread(parsed.data.threadId)?.pending) {
     return reply.code(409).send({ error: 'A change is waiting for your approval. Approve or reject it first.' });
   }
@@ -148,8 +200,8 @@ app.post('/api/runs', async (req, reply) => {
       thread.model = parsed.data.model;
       const followups = trackFollowups(emit);
       try {
-        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(thread.model, followups.emit, run));
-        if (outcome.status === 'awaiting-approval') thread.pending = outcome.pending;
+        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(thread.id, thread.model, followups.emit, run));
+        if (outcome.status === 'awaiting-approval') thread.pending = { ...outcome.pending, prompt: parsed.data.prompt };
         else followups.finish();
       } catch (err) {
         // Drop the half-finished turn so the next prompt starts from a consistent history.
@@ -157,7 +209,7 @@ app.post('/api/runs', async (req, reply) => {
         req.log.warn({ err: (err as Error).message }, 'run failed');
         throw err;
       }
-    });
+    }, { prompt: parsed.data.prompt });
     return reply.code(202).send(started);
   } catch (err) {
     if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
@@ -186,7 +238,12 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
     return reply.code(400).send({ error: "Send { toolCallId: string, decision: 'approve' | 'reject', selected?: number[] }." });
   }
   const { toolCallId, decision, selected, edits } = parsed.data;
-  const thread = findPendingByRun(req.params.id);
+  let thread = findPendingByRun(req.params.id);
+  if (!thread && store) {
+    // After a restart the paused run lives only in the database.
+    await ensureThread((await store.findSessionPendingOnRun(req.params.id).catch(() => null)) ?? undefined);
+    thread = findPendingByRun(req.params.id);
+  }
   const pending = thread?.pending;
   if (!thread || !pending || pending.callId !== toolCallId) {
     return reply.code(404).send({ error: 'No approval is waiting for this run. It may have been answered already.' });
@@ -200,8 +257,8 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
   try {
     const started = startRun(thread.id, async (t, emit, run) => {
       const followups = trackFollowups(emit);
-      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(t.model, followups.emit, run));
-      if (outcome.status === 'awaiting-approval') t.pending = outcome.pending;
+      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(t.id, t.model, followups.emit, run));
+      if (outcome.status === 'awaiting-approval') t.pending = { ...outcome.pending, prompt: pending.prompt };
       else followups.finish();
     });
     req.log.info({ tool: pending.tool, decision, selected: selected?.length }, 'approval answered');

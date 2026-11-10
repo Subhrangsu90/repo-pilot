@@ -34,6 +34,8 @@ export class GitHub {
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) throw new GitHubError(`GitHub ${init.method ?? 'GET'} ${path}: ${await message(res)}`, res.status);
+    // DELETE and some PUTs answer 204 with no body.
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
 

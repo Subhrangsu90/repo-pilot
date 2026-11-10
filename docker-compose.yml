@@ -1,0 +1,27 @@
+# Local Postgres for RepoPilot (sessions, runs, audit log). Dev only.
+#   npm run db:up      start it (data survives restarts in the named volume)
+#   npm run db:down    stop it
+# Bound to 127.0.0.1 only; the password is a local-dev default, not a secret.
+services:
+  db:
+    image: postgres:17.6-alpine
+    container_name: repopilot-db
+    environment:
+      POSTGRES_USER: repopilot
+      POSTGRES_PASSWORD: repopilot
+      POSTGRES_DB: repopilot
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - repopilot-db:/var/lib/postgresql/data
+    # Small footprint: this runs next to Ollama and the dev servers on a laptop.
+    command: postgres -c shared_buffers=64MB -c max_connections=20 -c work_mem=4MB
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U repopilot -d repopilot']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  repopilot-db:

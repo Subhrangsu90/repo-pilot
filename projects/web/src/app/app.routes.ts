@@ -32,6 +32,16 @@ export const routes: Routes = [
         loadComponent: () => import('./features/releases/release-builder').then((m) => m.ReleaseBuilder),
       },
       {
+        path: 'history',
+        title: 'History · RepoPilot',
+        loadComponent: () => import('./features/history/history').then((m) => m.History),
+      },
+      {
+        path: 'audit',
+        title: 'Audit log · RepoPilot',
+        loadComponent: () => import('./features/audit/audit-log').then((m) => m.AuditLog),
+      },
+      {
         path: 'playground',
         title: 'Playground · RepoPilot',
         loadComponent: () => import('./features/playground/playground').then((m) => m.Playground),

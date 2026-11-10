@@ -15,6 +15,15 @@ interface Run {
   listeners: Set<(event: AgentEvent) => void>;
   done: boolean;
   controller: AbortController;
+  /** The user prompt that started it; undefined for a run that resumed after an approval. */
+  prompt?: string;
+}
+
+/** What the store sees when a run ends. */
+export interface FinishedRun {
+  id: string;
+  prompt?: string;
+  events: AgentEvent[];
 }
 
 export interface Thread {
@@ -48,7 +57,30 @@ export function findPendingByRun(runId: string): Thread | undefined {
   return undefined;
 }
 
-export function startRun(threadId: string | undefined, body: RunBody): StartRunResponse {
+let observer: ((run: FinishedRun, thread: Thread) => void) | undefined;
+
+/** Called once per finished run (persistence). Errors in it never affect the run. */
+export function onRunFinished(fn: (run: FinishedRun, thread: Thread) => void) {
+  observer = fn;
+}
+
+/** Puts a conversation loaded from the database back in memory (after a restart). */
+export function restoreThread(data: Pick<Thread, 'id' | 'messages' | 'model' | 'pending'>): Thread {
+  const existing = threads.get(data.id);
+  if (existing) return existing;
+  const thread: Thread = { ...data, busy: false, touched: Date.now() };
+  threads.set(thread.id, thread);
+  evictOldThreads();
+  return thread;
+}
+
+/** Forgets a conversation (deleted from History). */
+export function dropThread(id: string) {
+  const thread = threads.get(id);
+  if (thread && !thread.busy) threads.delete(id);
+}
+
+export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string } = {}): StartRunResponse {
   const tid = threadId && threads.has(threadId) ? threadId : randomUUID();
   const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now() };
   if (thread.busy) throw new ThreadBusyError('This conversation is still running.');
@@ -57,7 +89,15 @@ export function startRun(threadId: string | undefined, body: RunBody): StartRunR
   threads.set(tid, thread);
   evictOldThreads();
 
-  const run: Run = { id: randomUUID(), threadId: tid, events: [], listeners: new Set(), done: false, controller: new AbortController() };
+  const run: Run = {
+    id: randomUUID(),
+    threadId: tid,
+    events: [],
+    listeners: new Set(),
+    done: false,
+    controller: new AbortController(),
+    prompt: opts.prompt,
+  };
   runs.set(run.id, run);
 
   const emit = (event: AgentEvent) => {
@@ -73,6 +113,11 @@ export function startRun(threadId: string | undefined, body: RunBody): StartRunR
     .finally(() => {
       run.done = true;
       thread.busy = false;
+      try {
+        observer?.({ id: run.id, prompt: run.prompt, events: run.events }, thread);
+      } catch {
+        // Persistence problems are logged by the store; the run itself is done.
+      }
       setTimeout(() => runs.delete(run.id), RUN_TTL_MS).unref();
     });
 

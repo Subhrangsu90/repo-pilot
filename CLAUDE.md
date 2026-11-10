@@ -17,6 +17,20 @@ through a `paths` entry in `projects/web/tsconfig.json`; the server runs it thro
 
 Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 
+## Database (Postgres in Docker + Drizzle)
+
+- `npm run db:up` starts `repopilot-db` (`docker-compose.yml`: postgres:17.6-alpine, 127.0.0.1:5433,
+  ~30 MB RAM, named volume); `npm run db:down` stops it. `DATABASE_URL` in `projects/server/.env`.
+- Schema `projects/server/src/db/schema.ts`; after changing it: `npm run db:generate -w
+  @repopilot/server -- --name <what>` (SQL in `projects/server/drizzle/`). The server applies
+  migrations on startup; `npm run db:migrate -w @repopilot/server` does it alone.
+- Optional by design: no `DATABASE_URL` or Postgres down → the server logs it and runs in memory;
+  History / Audit log endpoints answer 503.
+- Store tests hit a real database only when `TEST_DATABASE_URL` is set (never the dev DB, they empty
+  it): `docker exec repopilot-db createdb -U repopilot repopilot_test`, then
+  `TEST_DATABASE_URL=postgres://repopilot:repopilot@127.0.0.1:5433/repopilot_test npx vitest run
+  src/store.integration.spec.ts` in `projects/server`.
+
 ## Demo repository (`Subhrangsu90/repopilot-demo`)
 
 - `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude and
@@ -147,7 +161,17 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       rewrite" rejects, then sends a prompt listing the user's values (`rewritePrompt`); keeping
       them is asked of the model, not enforced. Verified live with Gemini (v1.1.0 from #14);
       rejected, nothing published. A real publish not tried yet.
-- [ ] Screen Spec screens next: Audit log (+ undo), History — both need Postgres.
+- [x] Postgres + Audit log + History (2026-11-11). Tables `sessions` (thread id; full ChatMessage[]
+      jsonb incl. tool calls and raw parts; `pending` jsonb), `runs` (event stream per run; prompt null
+      = resumed after approval), `audit_entries` (aud_0001; input + edits, approved / kept-by-user ids,
+      approver login, result, GitHub response, `inverse`). Differs from doc §9b on purpose: no
+      `messages` / `ui_surfaces` tables — reopening replays stored events (`replayRuns`), no model call.
+      `/audit` (filters, table, detail with raw JSON, Undo behind a confirm dialog) and `/history`
+      (search, filters, Today/Yesterday/Earlier, preview, rename, delete, Resume → `/ask?session=id`).
+      Verified live: a paused approval stored only in Postgres was answered after a restart; the resumed
+      run was saved; a second answer got 404. Not tried live yet: approve → audit entry → Undo.
+- [ ] Next: the agent naming sessions (now: first line of the prompt), last-6-turns + summary context
+      (doc §9b step 5), Refresh on stale surfaces, Issues page.
 - [ ] Week 3 (rest) – `FormSurface`, audit log + undo, Postgres
       (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
       returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
@@ -168,6 +192,15 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   (`PendingApproval`) sits on the in-memory `Thread` until answered; new prompts on that thread
   get 409. `POST /api/runs/:runId/actions {toolCallId, decision, selected?}` → new run on the same
   thread; the client streams it into the same turn (`awaiting-approval` turn status).
+- Persistence: `runs.ts` calls `onRunFinished` once per run → `Store.saveRun` (upserts the session,
+  inserts the run). `ensureThread` reloads a thread from Postgres when it is not in memory (new prompt
+  on an old session, or POST /actions for a pending run after a restart). Every approved change calls
+  `AgentDeps.onExecuted` → `Store.recordAudit`; rejections write nothing. Actions declare `summary`
+  and `inverse` (`tools/undo.ts`: reopen/close issues, delete release + tag; reviews have none).
+  `POST /api/audit/:id/undo` runs the inverse directly (user confirms in the UI; never the model) and
+  marks the entry undone once. Endpoints: `GET /api/sessions?q=&filter=all|waiting|changes|read`,
+  `GET|PATCH|DELETE /api/sessions/:id`, `GET /api/audit?filter=all|write|destructive|undone`,
+  `GET /api/audit/:id`, `POST /api/audit/:id/undo`.
 - The GenUI registry is provided by the lazy `Shell` (not app config), so catalog components stay
   out of the landing page's initial bundle (336 kB vs the 500 kB budget).
 - Approval gate surfaces: `ApprovalCard`, `PrReview` or `ReleaseForm` (`Plan.component`). An action may declare

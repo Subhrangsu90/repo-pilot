@@ -2,7 +2,7 @@ import type { AgentEvent } from '@repopilot/shared';
 import * as z from 'zod';
 import type { ChatMessage, LlmProvider, LlmReply, LlmRequest } from '../llm';
 import { LlmError, withFallback } from '../llm';
-import { resumeAgent, runAgent, type AgentDeps, type PendingApproval } from './loop';
+import { resumeAgent, runAgent, type AgentDeps, type ExecutedChange, type PendingApproval } from './loop';
 import { buildToolDefs } from './prompt';
 import type { ActionTool, Plan } from '../tools/actions';
 import { executors, ToolError, type Executor } from '../tools/read-tools';
@@ -209,6 +209,8 @@ function fakeAction(ids = [118, 131, 140], plan?: Plan) {
       calls.execute.push(picked);
       return { ok: true, data: { changed: picked }, result: `Closed ${picked.length} issues.`, detail: 'done' };
     },
+    summary: (_input, picked) => `Close ${picked.length} issues`,
+    inverse: (_input, picked) => ({ kind: 'issues', label: 'Reopen them', input: { issueNumbers: picked, action: 'reopen', reason: 'not_planned' } }),
   };
   return { tool, calls };
 }
@@ -286,6 +288,7 @@ describe('approval gate', () => {
       },
       edits: z.object({ summary: z.string().max(5) }),
       editedCard: (_card, edits) => ({ summary: (edits as { summary: string }).summary }),
+      summary: () => 'Edited change',
       async execute(_input, ids, _ctx, opts) {
         seen.push({ ids, ...opts });
         return { ok: true, data: {}, result: 'Done.', detail: 'done' };
@@ -320,6 +323,39 @@ describe('approval gate', () => {
     expect(cards(events).at(-1)).toMatchObject({ status: 'failed' });
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(JSON.stringify(result.results[0].content)).toContain('Nothing was changed');
+  });
+
+  it('records every approved change for the audit log, with what the user kept and how to undo it', async () => {
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'done' });
+    const { tool } = fakeAction();
+    const changes: ExecutedChange[] = [];
+    const { run, thread, deps } = setup(model, { actions: { bulk_update_issues: tool }, onExecuted: (c) => void changes.push(c) });
+    const paused = (await run('Close all wontfix issues')) as { pending: PendingApproval };
+    await resumeAgent(thread, { ...paused.pending, prompt: 'Close all wontfix issues' }, { approve: true, selected: [118, 140] }, deps);
+
+    expect(changes).toEqual([
+      expect.objectContaining({
+        tool: 'bulk_update_issues',
+        risk: 'destructive',
+        summary: 'Close 2 issues',
+        prompt: 'Close all wontfix issues',
+        approvedIds: [118, 140],
+        keptByUser: [131],
+        ok: true,
+        result: 'Closed 2 issues.',
+        inverse: expect.objectContaining({ kind: 'issues' }),
+      }),
+    ]);
+  });
+
+  it('writes no audit entry when the user rejects', async () => {
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'done' });
+    const { tool } = fakeAction();
+    const changes: ExecutedChange[] = [];
+    const { run, thread, deps } = setup(model, { actions: { bulk_update_issues: tool }, onExecuted: (c) => void changes.push(c) });
+    const paused = (await run('x')) as { pending: PendingApproval };
+    await resumeAgent(thread, paused.pending, { approve: false }, deps);
+    expect(changes).toEqual([]);
   });
 
   it('lets only one change wait per model turn', async () => {

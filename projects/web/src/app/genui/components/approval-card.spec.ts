@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import type { PropsOf, UiEvent } from '@repopilot/shared';
 import { ApprovalCard } from './approval-card';
 
@@ -34,6 +35,9 @@ async function render(p = props()) {
 }
 
 describe('ApprovalCard', () => {
+  // The success state links to the audit log.
+  beforeEach(() => TestBed.configureTestingModule({ providers: [provideRouter([])] }));
+
   it('moves focus to the card, never to Approve', async () => {
     const { el } = await render();
     expect(document.activeElement).toBe(el.querySelector('section'));
@@ -79,6 +83,7 @@ describe('ApprovalCard', () => {
   it('shows the outcome and no buttons once decided', async () => {
     const { el } = await render(props({ status: 'approved', selected: [9], result: 'Closed 1 issue.' }));
     expect(el.querySelector('[role=status]')?.textContent).toContain('Closed 1 issue.');
+    expect(el.querySelector('[role=status] a')?.getAttribute('href')).toBe('/audit');
     expect(el.querySelectorAll('section button')).toHaveLength(0);
   });
 });

@@ -1,5 +1,6 @@
 import { afterNextRender, Component, computed, ElementRef, input, linkedSignal, viewChild } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
+import { RouterLink } from '@angular/router';
 import { Icon } from '../../shared/ui/icon';
 
 type Props = PropsOf<'ApprovalCard'>;
@@ -12,7 +13,7 @@ type Props = PropsOf<'ApprovalCard'>;
  */
 @Component({
   selector: 'app-approval-card',
-  imports: [Icon],
+  imports: [Icon, RouterLink],
   host: { class: 'block' },
   template: `
     @let p = props();
@@ -96,9 +97,10 @@ type Props = PropsOf<'ApprovalCard'>;
             </p>
           }
           @case ('approved') {
-            <p role="status" class="flex items-center gap-2.5 rounded-md bg-success-soft px-3.5 py-3 text-body-md text-success">
+            <div role="status" class="flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-md bg-success-soft px-3.5 py-3 text-body-md text-success">
               <app-icon name="check" [size]="16" [stroke]="3" />{{ p.result }}
-            </p>
+              <a routerLink="/audit" class="ml-auto text-body-sm text-fg underline underline-offset-2">See it in the audit log</a>
+            </div>
           }
           @case ('rejected') {
             <p role="status" class="flex items-center gap-2.5 rounded-md bg-neutral-soft px-3.5 py-3 text-body-md text-fg-muted">
