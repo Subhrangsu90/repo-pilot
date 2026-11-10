@@ -396,6 +396,47 @@ describe('approval gate', () => {
   });
 });
 
+describe('review fallback (PR review page)', () => {
+  function reviewAction() {
+    const inputs: unknown[] = [];
+    const { tool, calls } = fakeAction();
+    const wrapped: ActionTool<any> = {
+      ...tool,
+      async plan(input, ctx) {
+        inputs.push(input);
+        return { ...(await tool.plan(input, ctx)), allowEmpty: true } as Plan;
+      },
+    };
+    return { tool: wrapped, inputs, calls };
+  }
+
+  it('drafts a summary-only review when the model stops without one, and reports the outcome as a note', async () => {
+    const model = scripted({ text: 'It adds an API reference to docs/api.md.' }, { text: 'Review posted.' });
+    const { tool, inputs, calls } = reviewAction();
+    const { run, thread, deps } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16 });
+
+    const outcome = await run('Review pull request #16');
+    expect(outcome.status).toBe('awaiting-approval');
+    const pending = (outcome as { pending: PendingApproval }).pending;
+    expect(pending.synthetic).toBe(true);
+    expect(inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'It adds an API reference to docs/api.md.', comments: [] }]);
+    // No fake tool call in the history: the thread ends on the model's own reply.
+    expect(thread.map((m) => m.role)).toEqual(['user', 'assistant']);
+
+    const resumed = await resumeAgent(thread, pending, { approve: true, selected: [] }, deps);
+    expect(resumed).toEqual({ status: 'done' }); // no second draft after the decision
+    expect(calls.execute).toHaveLength(1);
+    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('[RepoPilot app]') });
+  });
+
+  it('does not draft one when the run is not a PR review', async () => {
+    const { tool, inputs } = reviewAction();
+    const { run } = setup(scripted({ text: 'Hi.' }), { actions: { submit_pull_request_review: tool } });
+    expect(await run('hello')).toEqual({ status: 'done' });
+    expect(inputs).toEqual([]);
+  });
+});
+
 describe('withFallback', () => {
   const failing = (retryable: boolean): LlmProvider => ({
     name: 'p',

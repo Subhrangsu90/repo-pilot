@@ -80,6 +80,8 @@ export interface StartRunRequest {
   threadId?: string;
   /** Omitted: the server's LLM_PROVIDER decides. */
   model?: ModelOption;
+  /** The PR review page: the run must end on a review draft of this pull request. */
+  reviewPullRequest?: number;
 }
 
 export interface StartRunResponse {

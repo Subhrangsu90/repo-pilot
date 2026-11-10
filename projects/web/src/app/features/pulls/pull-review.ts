@@ -106,6 +106,6 @@ export class PullReview {
 
   protected start() {
     this.session.reset();
-    void this.session.send(`Review pull request #${this.number()}`);
+    void this.session.send(`Review pull request #${this.number()}`, { reviewPullRequest: Number(this.number()) });
   }
 }

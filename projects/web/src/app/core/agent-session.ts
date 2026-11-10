@@ -57,7 +57,7 @@ export class AgentSession {
     }
   }
 
-  async send(prompt: string): Promise<void> {
+  async send(prompt: string, opts: { reviewPullRequest?: number } = {}): Promise<void> {
     const text = prompt.trim();
     if (!text || this.isBusy() || this.awaitingApproval()) return;
 
@@ -70,6 +70,7 @@ export class AgentSession {
         prompt: text,
         ...(this.threadId ? { threadId: this.threadId } : {}),
         ...(model ? { model } : {}),
+        ...(opts.reviewPullRequest ? { reviewPullRequest: opts.reviewPullRequest } : {}),
       };
       const { runId, threadId } = await firstValueFrom(this.http.post<StartRunResponse>('/api/runs', body));
       this.threadId = threadId;

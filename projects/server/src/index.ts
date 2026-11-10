@@ -151,6 +151,7 @@ const StartRunBody = z.object({
   prompt: z.string().trim().min(1).max(2000),
   threadId: z.uuid().optional(),
   model: z.enum(['cloud', 'local']).optional(),
+  reviewPullRequest: z.number().int().positive().optional(),
 });
 
 /** The UI's Cloud / Local switch. Cloud keeps a configured cloud provider, else Gemini. */
@@ -165,6 +166,7 @@ function agentDeps(
   model: ModelOption | undefined,
   emit: (e: AgentEvent) => void,
   run: { id: string; signal: AbortSignal },
+  reviewPullRequest?: number,
 ): AgentDeps {
   const provider = createProvider({ ...config, LLM_PROVIDER: providerFor(model) }, (err) =>
     emit({ type: 'STEP_FINISHED', stepId: `${run.id}-fallback`, status: 'error', detail: `${err.message}; trying ${config.GEMINI_FALLBACK_MODEL}` }),
@@ -179,6 +181,7 @@ function agentDeps(
     emit,
     runId: run.id,
     signal: run.signal,
+    reviewPullRequest,
     onExecuted: store ? async (change) => void (await store.recordAudit(threadId, change)) : undefined,
   };
 }
@@ -200,7 +203,7 @@ app.post('/api/runs', async (req, reply) => {
       thread.model = parsed.data.model;
       const followups = trackFollowups(emit);
       try {
-        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(thread.id, thread.model, followups.emit, run));
+        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(thread.id, thread.model, followups.emit, run, parsed.data.reviewPullRequest));
         if (outcome.status === 'awaiting-approval') thread.pending = { ...outcome.pending, prompt: parsed.data.prompt };
         else followups.finish();
       } catch (err) {

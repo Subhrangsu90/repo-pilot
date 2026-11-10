@@ -1,4 +1,4 @@
-import { AgentEvent, getToolSpec, needsApproval, PropsOf, toolStepId, validateNode } from '@repopilot/shared';
+import { AgentEvent, getToolSpec, needsApproval, PropsOf, submitPullRequestReview, toolStepId, validateNode } from '@repopilot/shared';
 import type { ChatMessage, LlmProvider, LlmToolDef, ToolCall, ToolResult } from '../llm';
 import type { ActionTool } from '../tools/actions';
 import type { Inverse } from '../tools/undo';
@@ -17,6 +17,12 @@ export interface AgentDeps {
   runId: string;
   maxIterations?: number;
   signal?: AbortSignal;
+  /**
+   * The run reviews this pull request (the PR review page). If the model stops
+   * without drafting a review, the app drafts a summary-only one from its reply,
+   * so the page always ends on a review the user can edit and submit.
+   */
+  reviewPullRequest?: number;
   /** Called once per executed (or failed) approved change: the audit log. Errors are swallowed. */
   onExecuted?: (change: ExecutedChange) => Promise<void> | void;
 }
@@ -62,6 +68,11 @@ export interface PendingApproval {
   results: ToolResult[];
   /** The user prompt that led here (for the audit log). Set by the caller. */
   prompt?: string;
+  /**
+   * Drafted by the app, not called by the model: the thread has no matching tool
+   * call, so the outcome goes back to the model as a note instead of a tool result.
+   */
+  synthetic?: boolean;
 }
 
 export type AgentOutcome = { status: 'done' } | { status: 'awaiting-approval'; pending: PendingApproval };
@@ -103,24 +114,40 @@ export async function resumeAgent(
   deps: AgentDeps,
 ): Promise<AgentOutcome> {
   const content = await carryOut(pending, decision, deps);
-  thread.push({
-    role: 'tool',
-    results: pending.results.map((r) => (r.callId === pending.callId ? { ...r, content: cap(content) } : r)),
-  });
+  if (pending.synthetic) {
+    thread.push({
+      role: 'user',
+      text: `[RepoPilot app] A review draft for this pull request was shown to the user and they decided on it. Result: ${JSON.stringify(cap(content))}`,
+    });
+  } else {
+    thread.push({
+      role: 'tool',
+      results: pending.results.map((r) => (r.callId === pending.callId ? { ...r, content: cap(content) } : r)),
+    });
+  }
   // The card is on screen, so a model failure from here on degrades to a note.
-  return loop(thread, deps, true);
+  // No review fallback here: the review was just decided on.
+  return loop(thread, { ...deps, reviewPullRequest: undefined }, true);
 }
 
 async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boolean): Promise<AgentOutcome> {
   const { emit, provider } = deps;
   const max = deps.maxIterations ?? 6;
   let uiShown = uiShownBefore;
+  let reviewShown = false;
   deps = {
     ...deps,
     emit: (event) => {
       if (event.type === 'CUSTOM') uiShown = true;
+      if (event.type === 'CUSTOM' && event.name === 'ui' && (event.value.node as { component?: unknown }).component === 'PrReview') reviewShown = true;
       emit(event);
     },
+  };
+  /** The model is finished: end the run, or first draft the review it did not write. */
+  const finish = async (text: string): Promise<AgentOutcome> => {
+    if (deps.reviewPullRequest === undefined || reviewShown || deps.signal?.aborted) return { status: 'done' };
+    const pending = await draftReview(deps, deps.reviewPullRequest, text);
+    return pending ? { status: 'awaiting-approval', pending } : { status: 'done' };
   };
 
   for (let i = 0; i < max; i++) {
@@ -144,7 +171,7 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
 
     thread.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw });
     if (reply.text.trim()) emitText(emit, `${deps.runId}-msg-${i}`, reply.text.trim());
-    if (reply.toolCalls.length === 0) return { status: 'done' };
+    if (reply.toolCalls.length === 0) return finish(reply.text);
 
     const results: ToolResult[] = [];
     let pending: PendingApproval | undefined;
@@ -172,7 +199,26 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
   }
 
   emitText(emit, `${deps.runId}-msg-limit`, `I stopped after ${max} steps. Try a more specific request.`);
-  return { status: 'done' };
+  return finish('');
+}
+
+/**
+ * The fallback review: a comment review with the model's own words as the
+ * summary and no inline comments. It goes through the same dry run and approval
+ * as a model-drafted one, so nothing is posted until the user submits it.
+ */
+async function draftReview(deps: AgentDeps, number: number, text: string): Promise<PendingApproval | null> {
+  const summary = text.trim().slice(0, 2000) || 'Reviewed the changes; no problems found in the diff.';
+  const call: ToolCall = {
+    id: `${deps.runId}-auto-review`,
+    name: submitPullRequestReview.name,
+    args: { number, event: 'COMMENT', summary, comments: [] },
+  };
+  const prepared = await prepareApproval(call, deps);
+  if (prepared.kind !== 'pending') return null;
+  const pending: PendingApproval = { ...prepared.pending, synthetic: true, results: [] };
+  deps.emit({ type: 'CUSTOM', name: 'approval', value: { runId: deps.runId, toolCallId: pending.callId, surfaceId: pending.surfaceId } });
+  return pending;
 }
 
 async function runTool(call: ToolCall, deps: AgentDeps): Promise<unknown> {
