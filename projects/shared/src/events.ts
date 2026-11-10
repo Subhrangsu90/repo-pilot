@@ -52,10 +52,15 @@ export type AgentEventType = AgentEvent['type'];
 // HTTP contract
 // ---------------------------------------------------------------------------
 
+/** The side-nav model switch: the cloud model or the local Ollama model. */
+export type ModelOption = 'cloud' | 'local';
+
 export interface StartRunRequest {
   prompt: string;
   /** Continue a conversation; omitted for a new one. */
   threadId?: string;
+  /** Omitted: the server's LLM_PROVIDER decides. */
+  model?: ModelOption;
 }
 
 export interface StartRunResponse {

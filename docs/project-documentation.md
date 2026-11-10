@@ -375,6 +375,70 @@ async function runLoop(run: Run, emit: Emit) {
 
 The `inverse` field powers Undo. Merges are undone through `revert_via_pr`, never by rewriting history.
 
+## 9b. Sessions and chat history
+
+Every conversation is a saved session: its messages and every component the agent rendered are stored in Postgres, so a session reopens instantly, a pending approval survives a reload, and each audit entry links back to the session that made it. The Ask chat can do everything; the side nav pages are shortcuts to the same components.
+
+### What is stored
+
+| Table | Key columns | Purpose |
+| --- | --- | --- |
+| `sessions` | `id`, `userId`, `repo`, `title`, `status`, `createdAt`, `updatedAt` | One row per conversation; `status` is `active`, `awaiting-approval` or `done` |
+| `messages` | `id`, `sessionId`, `role`, `text`, `createdAt` | User prompts and agent text |
+| `ui_surfaces` | `id`, `sessionId`, `messageId`, `surfaceId`, `node` (jsonb), `version` | Validated UI nodes; an update in place adds a new version |
+| `runs` | `id`, `sessionId`, `status`, `pendingToolCall` (jsonb) | Paused agent runs waiting for approval |
+| `audit_entries` | existing fields + `sessionId` | Links every change to its session |
+
+### Drizzle schema sketch
+
+```ts
+export const sessions = pgTable('sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  repo: text('repo').notNull(),
+  title: text('title').notNull(),
+  status: text('status', { enum: ['active', 'awaiting-approval', 'done'] }).notNull().default('active'),
+  summary: text('summary'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const uiSurfaces = pgTable('ui_surfaces', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }).notNull(),
+  messageId: uuid('message_id').notNull(),
+  surfaceId: text('surface_id').notNull(),
+  node: jsonb('node').notNull(),
+  version: integer('version').notNull().default(1),
+});
+```
+
+### How it works
+
+1. **New session.** The first prompt creates a `sessions` row; the agent writes a short title ("PR #42 review").
+2. **While streaming.** Each message and each validated UI node is saved as it is emitted.
+3. **Reopen.** The History page lists sessions; opening one loads messages and the latest version of each surface and re-renders them. No model call is made.
+4. **Resume.** A session with `awaiting-approval` shows its ApprovalCard again; approving resumes the saved run.
+5. **Context for the model.** Only the last 6 turns plus the session `summary` are sent, so long sessions stay cheap. The summary is refreshed every few turns.
+6. **Stale data.** A reopened surface shows a "Captured at 16:12" note and a Refresh button that re-runs the read tool.
+
+### Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/sessions?q=&status=` | History list with search and filters |
+| GET | `/sessions/:id` | Messages and surfaces for one session |
+| PATCH | `/sessions/:id` | Rename or archive |
+| DELETE | `/sessions/:id` | Delete a session and its surfaces (audit entries are kept) |
+
+### In Angular
+
+- `SessionStore` holds `sessions`, `activeSessionId` and `activeSession` as signals; the History page and the side nav read from it.
+- Opening a session fills `AgentSessionService.surfaces` from stored nodes, so `GenUiHostComponent` renders them exactly as it renders live ones.
+- The route is `/s/:sessionId`, so a session can be bookmarked or shared within the team.
+
+Interview point: because the UI is data, it can be stored, replayed and tested like any other data.
+
 ## 10. Security, auth, rate limits and errors
 
 The safety model has three layers: the token never leaves the server, the model can only render allowlisted components, and nothing changes the repo without a human approval.

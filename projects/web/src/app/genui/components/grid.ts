@@ -15,7 +15,7 @@ const COLUMNS: Record<number, string> = {
   imports: [GenUiHost],
   host: { class: 'block' },
   template: `
-    <div class="grid gap-4" [class]="columnsClass()">
+    <div class="grid gap-3" [class]="columnsClass()">
       @for (child of props().children; track $index) {
         <app-genui-host [node]="child" [emit]="emit() ?? noop" />
       }

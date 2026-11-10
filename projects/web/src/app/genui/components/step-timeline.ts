@@ -1,34 +1,48 @@
 import { Component, input } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
+import { Icon } from '../../shared/ui/icon';
 
-/** Live progress of a run. Driven by STEP_* events, not emitted by the model. */
+/**
+ * Live progress of a run. Driven by STEP_* events, not emitted by the model.
+ * done = success check, running = text ring, pending = border-strong ring,
+ * error = danger cross plus the reason.
+ */
 @Component({
   selector: 'app-step-timeline',
+  imports: [Icon],
   host: { class: 'block' },
   template: `
-    <ol class="flex flex-col gap-1.5" aria-label="Agent progress">
+    <ol class="flex flex-col gap-3" aria-label="Agent progress">
       @for (step of props().steps; track step.id) {
-        <li class="flex items-start gap-2 text-sm" [attr.aria-current]="step.status === 'running' ? 'step' : null">
-          <span class="mt-0.5 grid size-4 shrink-0 place-items-center" aria-hidden="true">
+        <li
+          class="flex items-start gap-3 text-[14px]"
+          [class.text-fg-muted]="step.status === 'pending'"
+          [attr.aria-current]="step.status === 'running' ? 'step' : null"
+        >
+          <span class="mt-px grid size-5 shrink-0 place-items-center" aria-hidden="true">
             @switch (step.status) {
-              @case ('running') {
-                <span class="size-3 animate-spin rounded-full border-2 border-accent border-t-transparent"></span>
-              }
               @case ('done') {
-                <span class="text-xs text-good">✓</span>
+                <span class="grid size-5 place-items-center rounded-full bg-success text-bg">
+                  <app-icon name="check" [size]="12" [stroke]="3.5" />
+                </span>
+              }
+              @case ('running') {
+                <span class="size-5 animate-spin rounded-full border-2 border-fg border-t-transparent"></span>
               }
               @case ('error') {
-                <span class="text-xs text-danger">✕</span>
+                <span class="grid size-5 place-items-center rounded-full bg-danger text-bg">
+                  <app-icon name="cross" [size]="10" [stroke]="4" />
+                </span>
               }
               @default {
-                <span class="size-1.5 rounded-full bg-muted"></span>
+                <span class="size-5 rounded-full border-2 border-border-strong"></span>
               }
             }
           </span>
           <span class="min-w-0">
-            <span [class.text-muted]="step.status === 'done'" [class.text-danger]="step.status === 'error'">{{ step.label }}</span>
+            {{ step.label }}
             @if (step.detail) {
-              <span class="ml-1.5 text-xs text-muted">{{ step.detail }}</span>
+              <span class="ml-1 text-body-sm" [class]="step.status === 'error' ? 'text-danger' : 'text-fg-muted'">— {{ step.detail }}</span>
             }
             <span class="sr-only">({{ step.status }})</span>
           </span>

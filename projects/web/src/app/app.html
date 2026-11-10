@@ -1,33 +1,6 @@
 <a
   href="#main"
-  class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-10 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2"
+  class="sr-only rounded-sm bg-surface-3 px-3 py-2 text-fg focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-10"
   >Skip to content</a
 >
-
-<header class="border-b border-border bg-surface">
-  <div class="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-4">
-    <a routerLink="/" class="flex items-center gap-2 font-semibold text-ink">
-      <span class="grid size-7 place-items-center rounded-lg bg-accent text-sm text-white" aria-hidden="true">R</span>
-      <h1>RepoPilot</h1>
-    </a>
-    <nav aria-label="Main" class="flex gap-1">
-      <a
-        routerLink="/"
-        routerLinkActive="text-ink bg-canvas"
-        [routerLinkActiveOptions]="{ exact: true }"
-        class="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-ink"
-        >Chat</a
-      >
-      <a
-        routerLink="/playground"
-        routerLinkActive="text-ink bg-canvas"
-        class="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-ink"
-        >Playground</a
-      >
-    </nav>
-  </div>
-</header>
-
-<main id="main" class="mx-auto max-w-7xl px-4 py-6">
-  <router-outlet />
-</main>
+<router-outlet />

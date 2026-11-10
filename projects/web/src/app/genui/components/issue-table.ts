@@ -10,79 +10,77 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
   selector: 'app-issue-table',
   host: { class: 'block' },
   template: `
-    <div class="card overflow-hidden">
-      @if (props().title || props().selectable) {
-        <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <h3 class="text-sm font-medium text-ink">{{ props().title ?? 'Issues' }}</h3>
-          @if (props().selectable) {
-            <span class="text-xs text-muted tabular-nums" aria-live="polite">
-              {{ selected().size }} of {{ props().rows.length }} selected
-            </span>
-          }
-        </div>
-      }
-
+    <div class="card overflow-x-auto">
       @if (props().rows.length === 0) {
-        <p class="px-4 py-6 text-center text-sm text-muted">{{ props().emptyText }}</p>
+        @if (props().title) {
+          <h3 class="px-5 pt-4 text-body font-semibold">{{ props().title }}</h3>
+        }
+        <p class="px-5 py-6 text-center text-body-sm text-fg-muted">{{ props().emptyText }}</p>
       } @else {
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-sm">
-            <thead class="text-xs text-muted">
-              <tr>
+        <table class="w-full min-w-[560px] border-collapse text-left text-[14px]">
+          <caption class="px-5 pt-4 pb-2 text-left">
+            <span class="text-body font-semibold">{{ props().title ?? 'Issues' }}</span>
+            @if (props().selectable) {
+              <span class="ml-3 text-body-sm text-fg-muted tabular-nums" aria-live="polite">
+                {{ selected().size }} of {{ props().rows.length }} selected
+              </span>
+            }
+          </caption>
+          <thead class="text-body-sm text-fg-faint">
+            <tr>
+              @if (props().selectable) {
+                <th scope="col" class="w-12 py-2.5 pl-5 font-normal">
+                  <input
+                    type="checkbox"
+                    class="checkbox"
+                    aria-label="Select all issues"
+                    [checked]="allSelected()"
+                    [indeterminate]="selected().size > 0 && !allSelected()"
+                    (change)="toggleAll()"
+                  />
+                </th>
+              }
+              <th scope="col" class="px-5 py-2.5 font-normal">Issue</th>
+              <th scope="col" class="px-2.5 py-2.5 font-normal">Labels</th>
+              <th scope="col" class="px-2.5 py-2.5 font-normal">Author</th>
+              <th scope="col" class="px-5 py-2.5 text-right font-normal">Age</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of props().rows; track row.number) {
+              <tr
+                class="group h-12 border-t border-border hover:bg-surface-3 data-selected:bg-neutral-soft"
+                [attr.data-selected]="selected().has(row.number) ? '' : null"
+              >
                 @if (props().selectable) {
-                  <th scope="col" class="w-10 px-4 py-2">
+                  <td class="py-2.5 pl-5">
                     <input
                       type="checkbox"
                       class="checkbox"
-                      aria-label="Select all issues"
-                      [checked]="allSelected()"
-                      [indeterminate]="selected().size > 0 && !allSelected()"
-                      (change)="toggleAll()"
+                      [attr.aria-label]="'Select issue #' + row.number"
+                      [checked]="selected().has(row.number)"
+                      (change)="toggle(row.number)"
                     />
-                  </th>
+                  </td>
                 }
-                <th scope="col" class="px-4 py-2 font-medium">Issue</th>
-                <th scope="col" class="hidden px-4 py-2 font-medium sm:table-cell">Labels</th>
-                <th scope="col" class="px-4 py-2 text-right font-medium">Age</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (row of props().rows; track row.number) {
-                <tr
-                  class="border-t border-border data-selected:bg-accent/5"
-                  [attr.data-selected]="selected().has(row.number) ? '' : null"
-                >
-                  @if (props().selectable) {
-                    <td class="px-4 py-2.5">
-                      <input
-                        type="checkbox"
-                        class="checkbox"
-                        [attr.aria-label]="'Select issue #' + row.number"
-                        [checked]="selected().has(row.number)"
-                        (change)="toggle(row.number)"
-                      />
-                    </td>
-                  }
-                  <td class="px-4 py-2.5">
-                    <span class="font-mono text-xs text-muted">#{{ row.number }}</span>
-                    <span class="ml-1.5 text-ink">{{ row.title }}</span>
-                    @if (row.author) {
-                      <span class="ml-1.5 text-xs text-muted">by {{ row.author }}</span>
+                <td class="px-5 py-2.5">
+                  <span class="mr-2 font-mono text-fg-faint group-hover:text-fg-muted">#{{ row.number }}</span>{{ row.title }}
+                </td>
+                <td class="px-2.5 py-2.5">
+                  <div class="flex flex-wrap gap-1">
+                    @for (label of row.labels; track label) {
+                      <span class="badge px-2 py-0.5 font-normal" [class.badge-danger]="label.toLowerCase() === 'bug'">{{ label }}</span>
                     }
-                  </td>
-                  <td class="hidden px-4 py-2.5 sm:table-cell">
-                    <div class="flex flex-wrap gap-1">
-                      @for (label of row.labels; track label) {
-                        <span class="chip">{{ label }}</span>
-                      }
-                    </div>
-                  </td>
-                  <td class="px-4 py-2.5 text-right text-muted tabular-nums">{{ row.ageDays }}&nbsp;d</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </td>
+                <td class="px-2.5 py-2.5 font-mono text-body-sm text-fg-muted">{{ row.author ?? '—' }}</td>
+                <td class="px-5 py-2.5 text-right whitespace-nowrap text-fg-muted tabular-nums">
+                  {{ row.ageDays }} {{ row.ageDays === 1 ? 'day' : 'days' }}
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
       }
     </div>
   `,

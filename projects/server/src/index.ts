@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import * as z from 'zod';
-import { componentNames, type AgentEvent } from '@repopilot/shared';
-import { config } from './config';
+import { componentNames, type AgentEvent, type ModelOption } from '@repopilot/shared';
+import { config, type Config } from './config';
 import { runAgent } from './agent/loop';
 import { buildSystemPrompt, buildToolDefs } from './agent/prompt';
 import { isTerminal, startRun, subscribe, ThreadBusyError } from './agent/runs';
@@ -32,18 +32,28 @@ app.get('/api/health', async () => ({
 const StartRunBody = z.object({
   prompt: z.string().trim().min(1).max(2000),
   threadId: z.uuid().optional(),
+  model: z.enum(['cloud', 'local']).optional(),
 });
+
+/** The UI's Cloud / Local switch. Cloud keeps a configured cloud provider, else Gemini. */
+function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
+  if (model === 'local') return 'ollama';
+  if (model === 'cloud') return config.LLM_PROVIDER === 'ollama' ? 'gemini' : config.LLM_PROVIDER;
+  return config.LLM_PROVIDER;
+}
 
 app.post('/api/runs', async (req, reply) => {
   const parsed = StartRunBody.safeParse(req.body);
-  if (!parsed.success) return reply.code(400).send({ error: 'Send { prompt: string, threadId?: uuid }.' });
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "Send { prompt: string, threadId?: uuid, model?: 'cloud' | 'local' }." });
+  }
   if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set in projects/server/.env.' });
 
   try {
     const started = startRun(parsed.data.threadId, async (thread, emit, run) => {
       const before = thread.length;
       try {
-        const provider = createProvider(config, (err) =>
+        const provider = createProvider({ ...config, LLM_PROVIDER: providerFor(parsed.data.model) }, (err) =>
           emit({ type: 'STEP_FINISHED', stepId: `${run.id}-fallback`, status: 'error', detail: `${err.message}; trying ${config.GEMINI_FALLBACK_MODEL}` }),
         );
         await runAgent(thread, parsed.data.prompt, {

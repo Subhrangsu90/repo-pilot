@@ -1,11 +1,14 @@
 import { Component, computed, input } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
 
-const TONE: Record<PropsOf<'StatCard'>['tone'], string> = {
-  neutral: 'text-ink',
-  good: 'text-good',
-  warning: 'text-warning',
-  danger: 'text-danger',
+type Tone = PropsOf<'StatCard'>['tone'];
+
+/** Design system: neutral; good = context in success; warning = value + border in risk. */
+const TONE: Record<Tone, { card: string; value: string; context: string }> = {
+  neutral: { card: 'border-border', value: 'text-fg', context: 'text-fg-muted' },
+  good: { card: 'border-border', value: 'text-fg', context: 'text-success' },
+  warning: { card: 'border-risk', value: 'text-risk', context: 'text-fg-muted' },
+  danger: { card: 'border-danger', value: 'text-danger', context: 'text-fg-muted' },
 };
 
 const ARROW = { up: '↑', down: '↓', flat: '→' } as const;
@@ -14,18 +17,17 @@ const ARROW = { up: '↑', down: '↓', flat: '→' } as const;
   selector: 'app-stat-card',
   host: { class: 'block h-full' },
   template: `
-    <article class="card flex h-full flex-col p-4">
-      <p class="text-sm text-muted">{{ props().label }}</p>
-      <p class="mt-1 text-3xl font-semibold tabular-nums" [class]="toneClass()">
-        {{ props().value }}
-      </p>
+    @let tone = toneClasses();
+    <article class="card flex h-full flex-col gap-1.5 p-[18px]" [class]="tone.card">
+      <p class="text-label text-fg-muted">{{ props().label }}</p>
+      <p class="font-display text-stat tabular-nums" [class]="tone.value">{{ props().value }}</p>
       @if (props().trend; as trend) {
-        <p class="mt-1 text-xs text-muted">
+        <p class="text-body-sm" [class]="tone.context">
           <span aria-hidden="true">{{ arrow() }}</span> {{ trend.text }}
         </p>
       }
       @if (props().hint) {
-        <p class="mt-auto pt-2 text-xs text-muted">{{ props().hint }}</p>
+        <p class="mt-auto text-body-sm text-fg-faint">{{ props().hint }}</p>
       }
     </article>
   `,
@@ -34,7 +36,7 @@ export class StatCard {
   readonly props = input.required<PropsOf<'StatCard'>>();
   readonly emit = input<EmitFn>();
 
-  protected readonly toneClass = computed(() => TONE[this.props().tone]);
+  protected readonly toneClasses = computed(() => TONE[this.props().tone]);
   protected readonly arrow = computed(() => {
     const trend = this.props().trend;
     return trend ? ARROW[trend.direction] : '';

@@ -10,20 +10,16 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
   selector: 'app-error-fallback',
   host: { class: 'block' },
   template: `
-    <div class="card border-danger/40 bg-danger/5 p-4" role="group" aria-label="Component could not be rendered">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <p class="text-sm font-semibold text-danger">Could not render this part</p>
-          <p class="mt-1 whitespace-pre-wrap break-words text-sm text-ink">{{ props().message }}</p>
-        </div>
-        <button type="button" class="btn shrink-0" (click)="retry()">Retry</button>
-      </div>
+    <div class="card flex flex-col gap-3 border-danger p-[18px]" role="group" aria-label="Component could not be rendered">
+      <p class="text-body">Couldn't render this part of the answer.</p>
+      <p class="rounded-sm bg-bg px-3 py-2 font-mono text-[12px] break-words whitespace-pre-wrap text-fg-muted">{{ props().message }}</p>
       @if (props().raw) {
-        <details class="mt-3">
-          <summary class="cursor-pointer text-xs text-muted">Show raw payload</summary>
-          <pre class="mt-2 max-h-64 overflow-auto rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{{ props().raw }}</pre>
+        <details>
+          <summary class="cursor-pointer text-body-sm text-fg-muted">Show raw payload</summary>
+          <pre class="mt-2 max-h-64 overflow-auto rounded-sm bg-bg p-3 font-mono text-[12px] text-fg-muted">{{ props().raw }}</pre>
         </details>
       }
+      <button type="button" class="btn self-start" (click)="retry()">Ask the agent to retry</button>
     </div>
   `,
 })

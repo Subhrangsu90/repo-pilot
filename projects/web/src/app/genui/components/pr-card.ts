@@ -1,67 +1,79 @@
 import { Component, computed, input } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
 
-const STATE: Record<PropsOf<'PrCard'>['state'], { label: string; cls: string }> = {
-  open: { label: 'Open', cls: 'text-good border-good/40' },
-  draft: { label: 'Draft', cls: 'text-muted border-border' },
-  merged: { label: 'Merged', cls: 'text-accent border-accent/40' },
-  closed: { label: 'Closed', cls: 'text-danger border-danger/40' },
+type Pr = PropsOf<'PrCard'>;
+
+const STATE: Record<Pr['state'], { label: string; cls: string }> = {
+  open: { label: 'Open', cls: 'badge-success' },
+  draft: { label: 'Draft', cls: '' },
+  merged: { label: 'Merged', cls: 'badge-write' },
+  closed: { label: 'Closed', cls: 'badge-danger' },
 };
 
-const CI: Record<PropsOf<'PrCard'>['ci'], { icon: string; label: string; cls: string }> = {
-  success: { icon: '✓', label: 'CI passing', cls: 'text-good' },
-  failure: { icon: '✕', label: 'CI failing', cls: 'text-danger' },
-  pending: { icon: '●', label: 'CI running', cls: 'text-warning' },
-  none: { icon: '–', label: 'No CI', cls: 'text-muted' },
+/** A dot plus a word, never the dot alone. */
+const CI: Record<Pr['ci'], { label: string; dot: string | null }> = {
+  success: { label: 'CI passing', dot: 'bg-success' },
+  failure: { label: 'CI failing', dot: 'bg-danger' },
+  pending: { label: 'CI pending', dot: 'bg-fg-muted' },
+  none: { label: 'No CI', dot: null },
 };
 
+/**
+ * One pull request. With a GitHub url the whole card is a link (a stretched
+ * title link, so there is still exactly one focus stop per card).
+ */
 @Component({
   selector: 'app-pr-card',
   host: { class: 'block' },
   template: `
     @let p = props();
-    <article class="card flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="chip" [class]="state().cls">{{ state().label }}</span>
-          <span class="font-mono text-xs text-muted">#{{ p.number }}</span>
-        </div>
-        <h3 class="mt-1.5 text-sm font-medium text-ink">
+    <article class="card relative flex flex-col gap-2.5 p-4 has-[a]:hover:bg-surface-3">
+      <div class="flex flex-wrap items-center gap-2.5">
+        <span class="badge" [class]="state().cls">{{ state().label }}</span>
+        <h3 class="text-body font-semibold">
           @if (p.url) {
-            <a class="hover:underline" [href]="p.url" target="_blank" rel="noopener noreferrer" (click)="open()">{{ p.title }}</a>
+            <a [href]="p.url" target="_blank" rel="noopener noreferrer" class="after:absolute after:inset-0 after:rounded-lg" (click)="open()">
+              {{ p.title }}
+            </a>
           } @else {
             {{ p.title }}
           }
         </h3>
-        <p class="mt-1 text-xs text-muted">
-          @if (p.author) {
-            {{ p.author }} ·
-          }
-          opened {{ p.ageDays === 0 ? 'today' : p.ageDays + ' d ago' }}
-          @if (p.reviewers.length) {
-            · reviewers: {{ p.reviewers.join(', ') }}
-          } @else if (p.state === 'open') {
-            · <span class="text-warning">no reviewers</span>
-          }
-        </p>
-        @if (p.labels.length) {
-          <div class="mt-2 flex flex-wrap gap-1">
-            @for (label of p.labels; track label) {
-              <span class="chip">{{ label }}</span>
-            }
-          </div>
-        }
+        <span class="font-mono text-body-sm text-fg-faint">#{{ p.number }}</span>
       </div>
-      <div class="flex shrink-0 items-center gap-3 text-xs sm:flex-col sm:items-end sm:gap-1">
-        <span [class]="ci().cls" [attr.aria-label]="ci().label" [title]="ci().label">
-          <span aria-hidden="true">{{ ci().icon }}</span> {{ ci().label }}
+
+      <div class="flex flex-wrap gap-x-4.5 gap-y-1.5 text-body-sm text-fg-muted">
+        @if (p.author) {
+          <span class="font-mono">{{ p.author }}</span>
+        }
+        <span class="inline-flex items-center gap-1.5">
+          @if (ci().dot; as dot) {
+            <span class="size-2 rounded-full" [class]="dot" aria-hidden="true"></span>
+          }
+          {{ ci().label }}
         </span>
+        <span>
+          @if (p.reviewers.length) {
+            Reviewers: <span class="font-mono">{{ p.reviewers.join(', ') }}</span>
+          } @else {
+            No reviewers
+          }
+        </span>
+        <span>{{ age() }}</span>
         @if (p.additions !== undefined && p.deletions !== undefined) {
           <span class="font-mono tabular-nums" [attr.aria-label]="p.additions + ' additions, ' + p.deletions + ' deletions'">
-            <span class="text-good">+{{ p.additions }}</span> <span class="text-danger">−{{ p.deletions }}</span>
+            <span class="text-success">+{{ p.additions }}</span> <span class="text-danger">−{{ p.deletions }}</span>
           </span>
         }
       </div>
+
+      @if (p.labels.length) {
+        <div class="flex flex-wrap gap-1">
+          @for (label of p.labels; track label) {
+            <span class="badge px-2 py-0.5 font-normal" [class.badge-danger]="label.toLowerCase() === 'bug'">{{ label }}</span>
+          }
+        </div>
+      }
     </article>
   `,
 })
@@ -71,6 +83,10 @@ export class PrCard {
 
   protected readonly state = computed(() => STATE[this.props().state]);
   protected readonly ci = computed(() => CI[this.props().ci]);
+  protected readonly age = computed(() => {
+    const d = this.props().ageDays;
+    return d === 0 ? 'Opened today' : `${d} ${d === 1 ? 'day' : 'days'}`;
+  });
 
   protected open() {
     this.emit()?.({ component: 'PrCard', name: 'open', payload: { number: this.props().number } });

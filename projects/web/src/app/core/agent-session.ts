@@ -3,6 +3,7 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import type { AgentEvent, StartRunRequest, StartRunResponse } from '@repopilot/shared';
 import { firstValueFrom } from 'rxjs';
 import { applyEvent, newTurn, Turn } from './agent-run';
+import { ModelChoice } from './model-choice';
 
 /**
  * The conversation as signals. Each prompt starts a run on the agent server
@@ -12,6 +13,7 @@ import { applyEvent, newTurn, Turn } from './agent-run';
 @Injectable({ providedIn: 'root' })
 export class AgentSession {
   private readonly http = inject(HttpClient);
+  private readonly model = inject(ModelChoice);
   private threadId: string | undefined;
   private source: EventSource | undefined;
 
@@ -26,7 +28,12 @@ export class AgentSession {
     this.turns.update((list) => [...list, newTurn(turnId, text)]);
 
     try {
-      const body: StartRunRequest = { prompt: text, ...(this.threadId ? { threadId: this.threadId } : {}) };
+      const model = this.model.requested();
+      const body: StartRunRequest = {
+        prompt: text,
+        ...(this.threadId ? { threadId: this.threadId } : {}),
+        ...(model ? { model } : {}),
+      };
       const { runId, threadId } = await firstValueFrom(this.http.post<StartRunResponse>('/api/runs', body));
       this.threadId = threadId;
       this.listen(turnId, runId);

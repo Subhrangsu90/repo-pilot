@@ -39,6 +39,25 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   Keep providers behind one interface so the switch is a config change.
 - GitHub: fine-grained PAT in `projects/server/.env` until week 4, then GitHub OAuth.
 - Routes render client-side (`RenderMode.Client`); the SSR server only serves the shell.
+- Theme: **Graphite by default**, Light as a toggle saved in localStorage (`repopilot-theme`),
+  applied as `<html data-theme>`; index.html sets it before first paint.
+- Persistence (doc §9b): **Postgres in local Docker + Drizzle, added in week 3** (runs, audit
+  entries, then sessions/History). A hosted Postgres is chosen at deploy time (week 4).
+- Routes: `/` landing (public), app pages inside the `Shell` layout: `/ask` (chat; `?q=` sends a
+  prompt). Side nav lists only designed pages that exist; add Pull requests, Issues, Releases,
+  History and Audit log as they are built. `/playground` is a dev-only renderer test page: not in
+  the page designs, so it stays out of the nav and landing (reachable by URL only).
+
+## Design sources (claude.ai artifacts, owned by the user)
+
+- Design system "RepoPilot": <https://claude.ai/artifact/Tb41Yu1ZK5M24zNnKxMoGX> — read
+  `project/README.md` + `project/tokens.json` (Artifact `read` with `paths`). Graphite monochrome:
+  no brand hue; `risk` (amber) only for destructive, `success`/`danger` only for status. Fonts:
+  Space Grotesk (display), Inter (sans), JetBrains Mono (mono). Themes `graphite` + `light`.
+- Page designs "RepoPilot UI Design": <https://claude.ai/artifact/77EF7TsUucVhuJDGES8LGf> — artboards
+  `project/{Main,Workspace,Review,Approval,Release,Audit,History}.dc.html` (landing, Ask/health
+  report, PR review, bulk-close approval, release builder, audit log, session history).
+- Design hexes outside `tokens.json` (#D0D0D4, #5A5A60, #333336, #232325) map to the nearest token.
 
 ## Rules that must not break
 
@@ -60,8 +79,16 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   calls, and are keyboard accessible.
 - Adding a catalog component: schema + entry in `projects/shared/src/catalog.ts`, then
   register it in `projects/web/src/app/genui/registry.ts` (missing registration = compile error).
-- Styling: Tailwind v4 utilities with the design tokens in `projects/web/src/styles.css`
-  (light + dark).
+- Styling: Tailwind v4 utilities over the design-system tokens in `projects/web/src/styles.css`.
+  Raw vars keep DS names (`--surface-2`); utilities: `bg-bg`, `bg-surface-1..3`, `border-border`,
+  `border-border-strong`, `text-fg` / `text-fg-muted` / `text-fg-faint` (DS `text*`), `primary`,
+  `risk`, `success`, `danger` (+ `-soft`), `neutral-soft`. Type: `font-display`, `text-h1`, `text-h2`,
+  `text-stat`, `text-body`, `text-body-sm`, `text-label`, `text-badge`. Radius sm 8 / md 10 / lg 14 /
+  xl 18. Tailwind's default palette is removed (no `text-white`, `bg-gray-*`).
+- Shared classes: `.card`, `.agent-surface`, `.btn` (+ `-primary`, `-risk`, `-ghost`), `.chip`,
+  `.badge` (+ `-write`, `-risk`, `-success`, `-danger`, `-agent`), `.field`, `.checkbox`. One filled
+  button per surface; `btn-risk` only for a destructive approve. Every agent surface in the chat
+  shows the "Rendered by agent · Name" badge.
 
 ## Build plan and status
 
@@ -73,13 +100,20 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       `list_pull_requests` / `list_issues` / `get_repo_health` / `render_ui`, agent loop, in-memory
       runs + SSE, `AgentSession` signals + pure `applyEvent` reducer, chat page, `PrCard` / `PrList` /
       `StepTimeline`. Open: Claude provider (no key to test yet).
-- [ ] Week 3 – approval gate, dry-run, `ApprovalCard`, `FormSurface`, audit log + undo. First read
-      tool that returns issue/PR bodies must be tested against prompt-injection issue #8.
+- [x] Design restyle (2026-11-10) – design-system tokens + Graphite/Light themes, landing page,
+      side-nav `Shell`, Ask page and all catalog components restyled, model switch (Cloud / Local
+      Gemma → `model` on `POST /api/runs`).
+- [ ] Week 3 – approval gate, dry-run, `ApprovalCard`, `FormSurface`, audit log + undo, Postgres
+      (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
+      returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
+      keep tool calls/results and provider `raw` parts, not only `role` + `text`, or replayed
+      history loses tool context and Gemini thought signatures.
 - [ ] Week 4 – `DiffViewer` review, client tools, Playwright e2e, OAuth, deploy.
 
 ## Agent server notes
 
-- `POST /api/runs {prompt, threadId?}` → `{runId, threadId}`; `GET /api/runs/:id/events` is SSE with
+- `POST /api/runs {prompt, threadId?, model?: 'cloud'|'local'}` → `{runId, threadId}` (`model`
+  omitted = `LLM_PROVIDER`; local = Ollama; cloud = the configured cloud provider, else Gemini); `GET /api/runs/:id/events` is SSE with
   AG-UI-named events (`projects/shared/src/events.ts`). Runs buffer events, so late clients replay.
 - Tools return `{ data (for the model), ui (UiNode for the user), detail (timeline) }`. UI is
   validated in the loop before streaming; non-read tools are refused in `runTool` until week 3.
