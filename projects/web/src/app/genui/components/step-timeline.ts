@@ -4,7 +4,8 @@ import { Icon } from '../../shared/ui/icon';
 
 /**
  * Live progress of a run (rows, or one wrapping line with `inline`). Driven by STEP_* events, not emitted by the model.
- * done = success check, running = text ring, pending = border-strong ring,
+ * done = success check, running = spinning ring, waiting for approval = pulsing
+ * dot, pending = border-strong ring,
  * error = danger cross plus the reason.
  */
 @Component({
@@ -28,7 +29,7 @@ import { Icon } from '../../shared/ui/icon';
                 </span>
               }
               @case ('running') {
-                <span class="size-5 rounded-full border-2 border-fg"></span>
+                <span class="size-4 animate-spin rounded-full border-2 border-fg border-t-transparent"></span>
               }
               @case ('error') {
                 <span class="grid size-5 place-items-center rounded-full bg-danger text-bg">
@@ -36,7 +37,15 @@ import { Icon } from '../../shared/ui/icon';
                 </span>
               }
               @default {
-                <span class="size-5 rounded-full border-2 border-border-strong"></span>
+                @if (isApproval(step.id)) {
+                  <!-- Paused on the user, not idle: a breathing dot so it reads as live. -->
+                  <span class="relative grid size-5 place-items-center">
+                    <span class="absolute inset-0 animate-ping rounded-full border-2 border-fg opacity-40"></span>
+                    <span class="size-2.5 animate-pulse rounded-full bg-fg"></span>
+                  </span>
+                } @else {
+                  <span class="size-5 rounded-full border-2 border-border-strong"></span>
+                }
               }
             }
           </span>
@@ -57,4 +66,8 @@ export class StepTimeline {
   readonly emit = input<EmitFn>();
   /** The Screen Spec's "step strip": the same steps on one wrapping line (Ask, PR review). */
   readonly inline = input(false);
+
+  protected isApproval(id: string) {
+    return id.startsWith('approval-');
+  }
 }

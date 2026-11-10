@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { bulkUpdateIssues, createRelease, PropsOf, ReleaseEdits, PrReviewEdits, submitPullRequestReview } from '@repopilot/shared';
 import { GitHubError } from '../github/client';
-import { commentableLines, fetchPullRequest } from '../github/pulls';
+import { commentableLines, fetchPullRequest, MAX_DIFFS, trimToComments } from '../github/pulls';
 import { fetchReleaseChanges, renderNotes, tagExists } from '../github/releases';
 import { ageDays, resolveRepo, ToolContext, ToolError } from './read-tools';
 import type { Inverse } from './undo';
@@ -218,8 +218,6 @@ const EVENT_TEXT: Record<ReviewEvent, string> = {
   APPROVE: 'an approving review',
   REQUEST_CHANGES: 'a review requesting changes',
 };
-const MAX_DIFFS = 5;
-const MAX_DIFF_LINES = 400;
 const GITHUB_URL = /^https:\/\/github\.com\//;
 
 export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestReview> = {
@@ -253,6 +251,12 @@ export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestRev
     const own = pr.info.author !== undefined && pr.info.author.toLowerCase() === (await ctx.github.login()).toLowerCase();
     const allowedEvents: ReviewEvent[] = own ? ['COMMENT'] : ALL_EVENTS;
     const event = allowedEvents.includes(input.event) ? input.event : 'COMMENT';
+
+    // Files with comments first, then the rest of the change, so the user always sees the code being reviewed.
+    for (const f of pr.files) {
+      if (shownPaths.length === MAX_DIFFS) break;
+      if (f.hasPatch && !shownPaths.includes(f.path)) shownPaths.push(f.path);
+    }
 
     const diffs = shownPaths.map((path) => {
       const f = byPath.get(path)!;
@@ -442,17 +446,7 @@ export const createReleaseTool: ActionTool<typeof createRelease> = {
   },
 };
 
-/** Long diffs keep only the hunks that carry a comment, so the surface stays readable and within limits. */
-export function trimToComments<L extends { kind: string; new?: number }>(lines: L[], commentLines: number[]): L[] {
-  if (lines.length <= MAX_DIFF_LINES) return lines;
-  const hunks: L[][] = [];
-  for (const line of lines) {
-    if (line.kind === 'hunk' || hunks.length === 0) hunks.push([]);
-    hunks.at(-1)!.push(line);
-  }
-  const wanted = hunks.filter((h) => h.some((l) => l.new !== undefined && commentLines.includes(l.new)));
-  return (wanted.length ? wanted : hunks).flat().slice(0, MAX_DIFF_LINES);
-}
+export { trimToComments } from '../github/pulls';
 
 // ---------------------------------------------------------------------------
 

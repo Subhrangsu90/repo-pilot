@@ -48,6 +48,21 @@ interface FileJson {
 }
 
 const MAX_LINE = 500;
+/** Files one surface shows as diffs, and rows per file (catalog limits). */
+export const MAX_DIFFS = 5;
+const MAX_DIFF_LINES = 400;
+
+/** Long diffs keep only the hunks that carry a comment, so the surface stays readable and within limits. */
+export function trimToComments<L extends { kind: string; new?: number }>(lines: L[], commentLines: number[]): L[] {
+  if (lines.length <= MAX_DIFF_LINES) return lines;
+  const hunks: L[][] = [];
+  for (const line of lines) {
+    if (line.kind === 'hunk' || hunks.length === 0) hunks.push([]);
+    hunks.at(-1)!.push(line);
+  }
+  const wanted = hunks.filter((h) => h.some((l) => l.new !== undefined && commentLines.includes(l.new)));
+  return (wanted.length ? wanted : hunks).flat().slice(0, MAX_DIFF_LINES);
+}
 
 /**
  * A GitHub unified patch as rows with old/new line numbers. "\ No newline at

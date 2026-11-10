@@ -101,6 +101,29 @@ export function replayRuns(runs: { id: string; prompt: string | null; events: Ag
   return turns;
 }
 
+const componentOf = (node: unknown) => (node as { component?: unknown } | null)?.component;
+
+/** The plain diff get_pull_request shows: a Section of DiffViewers (server-only, so the model cannot build one). */
+function isDiffSection(node: unknown): boolean {
+  if (componentOf(node) !== 'Section') return false;
+  const children = (node as { props?: { children?: unknown } }).props?.children;
+  return Array.isArray(children) && children.length > 0 && children.every((c) => componentOf(c) === 'DiffViewer');
+}
+
+/**
+ * The surfaces to draw for a turn. Once the review draft is on screen it carries
+ * the same diffs itself, so the plain diff shown while the agent read the PR is dropped.
+ */
+export function visibleSurfaces(turn: Turn): UiSurface[] {
+  if (!turn.surfaces.some((s) => componentOf(s.node) === 'PrReview')) return turn.surfaces;
+  return turn.surfaces.filter((s) => !isDiffSection(s.node));
+}
+
+/** True once the turn shows a PR review draft. */
+export function hasReview(turn: Turn): boolean {
+  return turn.surfaces.some((s) => componentOf(s.node) === 'PrReview');
+}
+
 function settle(steps: Step[], status: 'done' | 'error'): Step[] {
   return steps.map((s) => (s.status === 'running' ? { ...s, status } : s));
 }

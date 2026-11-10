@@ -40,7 +40,8 @@ const MODELS: { value: ModelOption; label: string }[] = [
 
 /**
  * App layout (Screen Spec "Shared layout"): side nav on the left, the page on
- * the right; below 780px the nav stacks above the content and is never sticky.
+ * the right; below 780px the nav stacks above the content and is never sticky; from 780px
+ * it is pinned to the viewport height and scrolls on its own, apart from the page.
  * The model switch shows on Ask only; each page draws its own top bar.
  */
 @Component({
@@ -52,7 +53,7 @@ const MODELS: { value: ModelOption; label: string }[] = [
   template: `
     <nav
       aria-label="Main"
-      class="flex shrink-0 flex-col gap-6 border-b border-border bg-surface-1 px-3.5 py-5 min-[780px]:w-62 min-[780px]:border-r min-[780px]:border-b-0"
+      class="flex shrink-0 flex-col gap-6 border-b border-border bg-surface-1 px-3.5 py-5 min-[780px]:sticky min-[780px]:top-0 min-[780px]:h-dvh min-[780px]:w-62 min-[780px]:self-start min-[780px]:overflow-y-auto min-[780px]:border-r min-[780px]:border-b-0"
     >
       <a routerLink="/" class="self-start rounded-sm px-2 py-1" aria-label="RepoPilot home"><app-logo /></a>
 

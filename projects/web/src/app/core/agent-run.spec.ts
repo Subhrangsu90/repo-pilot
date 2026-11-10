@@ -1,9 +1,22 @@
 import type { AgentEvent } from '@repopilot/shared';
-import { applyEvent, newTurn, replayRuns, Turn } from './agent-run';
+import { applyEvent, newTurn, replayRuns, Turn, visibleSurfaces } from './agent-run';
 import { dayDiff, formatWhen } from './api';
 
 const fold = (events: AgentEvent[]): Turn => events.reduce(applyEvent, newTurn('t1', 'Show my open PRs'));
 const prList = (title: string) => ({ component: 'PrList', props: { title, items: [] } });
+
+describe('visibleSurfaces', () => {
+  const diff = { component: 'Section', props: { title: 'Changes in #1', children: [{ component: 'DiffViewer', props: { path: 'a.ts', lines: [] } }] } };
+  const ui = (surfaceId: string, node: unknown): AgentEvent => ({ type: 'CUSTOM', name: 'ui', value: { surfaceId, node } as never });
+
+  it('keeps the plain diff until the review draft arrives, then drops it', () => {
+    const reading = fold([ui('d', diff)]);
+    expect(visibleSurfaces(reading).map((s) => s.surfaceId)).toEqual(['d']);
+
+    const reviewed = applyEvent(reading, ui('r', { component: 'PrReview', props: {} }));
+    expect(visibleSurfaces(reviewed).map((s) => s.surfaceId)).toEqual(['r']);
+  });
+});
 
 describe('applyEvent', () => {
   it('keeps at most three follow-up prompts from the server', () => {

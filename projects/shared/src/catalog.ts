@@ -256,7 +256,7 @@ export const PrReviewProps = z.object({
   files: z
     .array(z.object({ path: z.string().max(300), additions: z.number().int().nonnegative(), deletions: z.number().int().nonnegative() }))
     .max(100),
-  /** Only the files that carry comments. */
+  /** Files that carry comments first, then other changed files, up to 5. */
   diffs: z.array(DiffViewerProps).max(5),
   comments: z.array(ReviewComment.extend({ path: z.string().max(300) })).max(20),
   /** Comments the dry run dropped, e.g. a line that is not in the diff. */

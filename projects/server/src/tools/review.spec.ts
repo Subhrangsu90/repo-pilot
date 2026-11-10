@@ -1,7 +1,7 @@
 import { validateNode } from '@repopilot/shared';
 import { GitHubError } from '../github/client';
 import { submitPullRequestReviewTool, trimToComments } from './actions';
-import type { ToolContext } from './read-tools';
+import { runGetPullRequest, type ToolContext } from './read-tools';
 
 // auth.ts: lines 1-3 unchanged context, line 4 added, old line 4 removed, line 5 added.
 const PATCH = ['@@ -1,4 +1,5 @@', ' import x', ' const a = 1;', ' const b = 2;', '+const key = ip;', '-log(password);', '+log(user);'].join('\n');
@@ -124,6 +124,24 @@ describe('submit_pull_request_review', () => {
     const edits = { event: 'APPROVE' as const, summary: 'LGTM', comments: [] };
     await submitPullRequestReviewTool.execute(draft, [], ctx, { edits, carry: plan.carry });
     expect(posted[0].body).toMatchObject({ event: 'COMMENT', comments: [] });
+  });
+});
+
+describe('pull request diffs on screen', () => {
+  it('get_pull_request shows the real patch of the files that have one', async () => {
+    const { ctx } = fakeCtx();
+    const out = await runGetPullRequest({ number: 15 } as never, ctx);
+    expect(validateNode(out.ui).ok).toBe(true);
+    const children = (out.ui!.props as { children: { component: string; props: { path: string; lines: unknown[] } }[] }).children;
+    expect(children.map((c) => [c.component, c.props.path])).toEqual([['DiffViewer', 'src/auth.ts']]);
+    expect(children[0].props.lines).toHaveLength(7);
+  });
+
+  it('a review without comments still shows the changed code', async () => {
+    const { ctx } = fakeCtx();
+    const plan = await submitPullRequestReviewTool.plan({ ...draft, comments: [] }, ctx);
+    if (plan.kind !== 'card' || plan.component !== 'PrReview') throw new Error('expected a PrReview');
+    expect(plan.card.diffs.map((d) => d.path)).toEqual(['src/auth.ts']);
   });
 });
 

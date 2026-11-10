@@ -12,7 +12,7 @@ import {
   validateNode,
 } from '@repopilot/shared';
 import type { GitHub } from '../github/client';
-import { annotate, fetchPullRequest } from '../github/pulls';
+import { annotate, fetchPullRequest, MAX_DIFFS, trimToComments } from '../github/pulls';
 import { fetchReleaseChanges } from '../github/releases';
 
 export interface ToolContext {
@@ -365,8 +365,27 @@ export const runGetPullRequest: Executor<typeof getPullRequest> = async (input, 
     return { path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, diff };
   });
 
+  // What the user sees: the real patch of the first files (DiffViewer is server-only, so the model cannot fake one).
+  const withPatch = pr.files.filter((f) => f.hasPatch);
+  const shown = withPatch.slice(0, MAX_DIFFS);
+  const more = pr.files.length - shown.length;
+  const ui: UiNode | undefined = shown.length
+    ? {
+        component: 'Section',
+        props: {
+          title: `Changes in #${pr.info.number}`,
+          description: more > 0 ? `Showing ${shown.length} of ${pr.files.length} changed files.` : undefined,
+          children: shown.map((f) => ({
+            component: 'DiffViewer',
+            props: { path: f.path, additions: f.additions, deletions: f.deletions, lines: trimToComments(f.lines, []), comments: [] },
+          })),
+        },
+      }
+    : undefined;
+
   const { url: _url, ...info } = pr.info;
   return {
+    ui,
     data: {
       repo: repo.full,
       ...info,

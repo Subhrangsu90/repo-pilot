@@ -1,7 +1,7 @@
 import { afterRenderEffect, Component, computed, effect, ElementRef, inject, input, OnInit, untracked, viewChild } from '@angular/core';
 import { Router } from '@angular/router';
 import { isToolStepId, type EmitFn } from '@repopilot/shared';
-import type { Turn } from '../../core/agent-run';
+import { visibleSurfaces, type Turn } from '../../core/agent-run';
 import { AgentSession } from '../../core/agent-session';
 import { formatWhen } from '../../core/api';
 import { ServerStatus } from '../../core/server-status';
@@ -84,8 +84,16 @@ function componentOf(node: unknown): string {
             @if (turn.steps.length) {
               <app-step-timeline [props]="{ steps: turn.steps }" [inline]="true" />
             }
+            @if (thinking(turn)) {
+              <p class="flex items-center gap-2 text-body-md text-fg-muted" role="status">
+                <span class="grid size-5 place-items-center" aria-hidden="true">
+                  <span class="size-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+                </span>
+                Thinking…
+              </p>
+            }
 
-            @for (surface of turn.surfaces; track surface.surfaceId) {
+            @for (surface of surfacesOf(turn); track surface.surfaceId) {
               @let name = componentName(surface.node);
               @if (name === 'ApprovalCard' || name === 'PrReview' || name === 'ReleaseForm') {
                 <!-- Built by the server, not the agent: it carries its own risk badge and frame. -->
@@ -181,10 +189,16 @@ export class Chat implements OnInit {
   protected readonly suggestions = SUGGESTIONS;
   protected readonly draft = this.session.draft;
   protected readonly componentName = componentOf;
+  protected readonly surfacesOf = visibleSurfaces;
   private readonly end = viewChild.required<ElementRef<HTMLElement>>('end');
   private readonly promptBox = viewChild.required<ElementRef<HTMLTextAreaElement>>('promptBox');
 
   /** Tool steps still running: each gets a placeholder until its UI arrives. */
+  /** The run is live but no step is spinning yet (or between steps): show that the model is working. */
+  protected thinking(turn: Turn) {
+    return turn.status === 'running' && !turn.steps.some((s) => s.status === 'running');
+  }
+
   protected loadingSteps(turn: Turn) {
     return turn.steps.filter((s) => s.status === 'running' && isToolStepId(s.id));
   }

@@ -34,10 +34,11 @@ const EVENTS: { value: ReviewEvent; label: string }[] = [
 
     <div class="flex flex-wrap items-start gap-5">
       <div class="flex min-w-0 flex-[3_1_520px] flex-col gap-4">
+        @if (p.comments.length === 0) {
+          <p class="card p-card text-body-sm text-fg-muted">No inline comments: the review is the summary only.</p>
+        }
         @for (d of diffs(); track d.path) {
           <app-diff-viewer [props]="d" [editable]="interactive()" [emit]="onDiffEvent" />
-        } @empty {
-          <p class="card p-card text-body-sm text-fg-muted">No inline comments: the review is the summary only.</p>
         }
         @if (removed() > 0 && interactive()) {
           <p class="flex flex-wrap items-center gap-2 text-body-sm text-fg-muted">

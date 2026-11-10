@@ -139,7 +139,7 @@ const HOW = [
                         </span>
                       }
                       @case ('running') {
-                        <span class="size-5 rounded-full border-2 border-fg"></span>
+                        <span class="grid size-5 place-items-center"><span class="size-4 animate-spin rounded-full border-2 border-fg border-t-transparent"></span></span>
                       }
                       @default {
                         <span class="size-5 rounded-full border-2 border-border-strong"></span>
