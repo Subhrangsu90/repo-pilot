@@ -170,14 +170,18 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       (search, filters, Today/Yesterday/Earlier, preview, rename, delete, Resume → `/ask?session=id`).
       Verified live: a paused approval stored only in Postgres was answered after a restart; the resumed
       run was saved; a second answer got 404. Not tried live yet: approve → audit entry → Undo.
-- [ ] Next: the agent naming sessions (now: first line of the prompt), last-6-turns + summary context
-      (doc §9b step 5), Refresh on stale surfaces, Issues page.
-- [ ] Week 3 (rest) – `FormSurface`, audit log + undo, Postgres
-      (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
-      returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
-      keep tool calls/results and provider `raw` parts, not only `role` + `text`, or replayed
-      history loses tool context and Gemini thought signatures.
-- [ ] Week 4 – `DiffViewer` review, client tools, Playwright e2e, OAuth, deploy.
+- [x] Week 3 merged to `master` (PR #1, 2026-11-11). FormSurface ships as the ReleaseForm pattern,
+      not a separate catalog component. Stored sessions keep tool calls/results and provider `raw`
+      parts (needed for replay and Gemini thought signatures).
+- [ ] Week 3 wrap-up (branch `chore/week-3-wrap-up`) – live checks before week 4:
+      approve → audit entry → Undo; prompt injection via issue #8 and via a PR description
+      (`untrustedDescription`) must be treated as data; one real PR review submit; one real release
+      publish. Then: Issues page (last dimmed nav link), last-6-turns + summary context (doc §9b
+      step 5; needed for the "only show bugs" follow-up), agent naming sessions (now: first line of
+      the prompt), Refresh on stale surfaces.
+- [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff
+      lines), recorded event-stream fixtures + mock agent, Playwright e2e, GitHub OAuth, deploy
+      (hosted Postgres).
 
 ## Agent server notes
 
