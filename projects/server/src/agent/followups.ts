@@ -9,6 +9,8 @@ import type { AgentEvent } from '@repopilot/shared';
 const BY_COMPONENT: Record<string, string[]> = {
   // get_repo_health renders a Section (stat cards, chart, contributors, oldest issues).
   Section: ['Only show bugs', 'Close stale wontfix issues', 'Review the stale PRs'],
+  // get_pull_request renders a Section of DiffViewers (see surfaceKey).
+  PullRequestDiff: ['Show my open PRs', 'Which PRs have failing CI?'],
   PrList: ['Which PRs have failing CI?', 'Show only draft PRs', 'Show merged PRs'],
   IssueTable: ['Only show bugs', 'Close all open wontfix issues', 'Show the oldest open issues'],
   ApprovalCard: ['Show the open issues', 'Give me a health report of the repo'],
@@ -17,6 +19,16 @@ const BY_COMPONENT: Record<string, string[]> = {
 };
 
 const MAX = 3;
+
+/**
+ * The key a surface's follow-ups are listed under: its component name, except
+ * that a Section of diffs (a pull request's changes) is not a health report.
+ */
+export function surfaceKey(node: { component: string; props?: unknown }): string {
+  const children = (node.props as { children?: { component?: unknown }[] } | undefined)?.children;
+  if (node.component === 'Section' && children?.some((c) => c.component === 'DiffViewer')) return 'PullRequestDiff';
+  return node.component;
+}
 
 /** Follow-ups for the surfaces a run showed, most recent surface first, without repeats. */
 export function followupsFor(components: string[]): string[] {
@@ -36,7 +48,7 @@ export function trackFollowups(emit: (e: AgentEvent) => void) {
   const shown: string[] = [];
   return {
     emit: (e: AgentEvent) => {
-      if (e.type === 'CUSTOM' && e.name === 'ui') shown.push(e.value.node.component);
+      if (e.type === 'CUSTOM' && e.name === 'ui') shown.push(surfaceKey(e.value.node));
       emit(e);
     },
     finish: () => {

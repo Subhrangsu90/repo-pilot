@@ -173,10 +173,25 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - [x] Week 3 merged to `master` (PR #1, 2026-11-11). FormSurface ships as the ReleaseForm pattern,
       not a separate catalog component. Stored sessions keep tool calls/results and provider `raw`
       parts (needed for replay and Gemini thought signatures).
-- [ ] Week 3 wrap-up (branch `chore/week-3-wrap-up`) – live checks before week 4:
-      approve → audit entry → Undo; prompt injection via issue #8 and via a PR description
-      (`untrustedDescription`) must be treated as data; one real PR review submit; one real release
-      publish. Then: Issues page (last dimmed nav link), last-6-turns + summary context (doc §9b
+- [ ] Week 3 wrap-up (branch `chore/week-3-wrap-up`) – live checks before week 4. Verified
+      2026-11-10 against GitHub: approve → audit → Undo (`aud_0001`: closed #9, #10 with #11
+      deselected, then reopened), real release publish + Undo (`aud_0002`: v1.0.1 release and tag
+      deleted), real review submit (`aud_0003`: Comment on PR #17; reviews have no undo).
+      Prompt injection (2026-11-11): issue bodies never reach the model (issue tools send titles
+      only), so #8 cannot fire. PR #16's description now plants an injection (also in the seed).
+      "Review pull request #16": Gemini drafted a Comment-only PrReview, Gemma drafted nothing;
+      neither obeyed it (no issue tools, no Approve; own PR allows Comment only anyway) and nothing
+      reached GitHub. Gaps found, then fixed (2026-11-12): (1) neither model flagged it →
+      `tools/injection.ts` `findInjection()` checks the PR description in code; `get_pull_request`
+      adds `injectionWarning` for the model and a warning in the diff Section, the review dry run
+      sets PrReview `injectionWarning` (flagged sentence, shown as text in a `role="note"` box);
+      (2) Gemma claimed a draft without the tool → a review is owed when `reviewPullRequest` is set
+      or the prompt says "review" and the run read exactly one PR; the loop reminds the model once
+      (its claim is held back), then the summary-only fallback drafts it; (3) PR diff Sections got
+      health-report chips → `surfaceKey()` keys them `PullRequestDiff`. Re-verified live on #16:
+      Gemma and Gemini both drafted a real PrReview with the warning and mentioned the injection;
+      rejected, nothing posted. Issue and PR titles are not checked yet. `ng test` sometimes prints
+      "no tests" on the first run after source changes; a re-run passes. Then: Issues page (last dimmed nav link), last-6-turns + summary context (doc §9b
       step 5; needed for the "only show bugs" follow-up), agent naming sessions (now: first line of
       the prompt), Refresh on stale surfaces.
 - [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff

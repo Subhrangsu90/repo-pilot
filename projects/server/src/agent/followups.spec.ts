@@ -25,6 +25,15 @@ describe('followups', () => {
     });
   });
 
+  it('does not offer health-report follow-ups for a pull request diff', () => {
+    const events: AgentEvent[] = [];
+    const t = trackFollowups((e) => events.push(e));
+    const diff = { component: 'DiffViewer', props: {} };
+    t.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId: 's1', node: { component: 'Section', props: { title: 'Changes in #16', children: [diff] } } } });
+    t.finish();
+    expect(events.at(-1)).toEqual({ type: 'CUSTOM', name: 'followups', value: { prompts: ['Show my open PRs', 'Which PRs have failing CI?'] } });
+  });
+
   it('sends nothing when the run showed no UI', () => {
     const events: AgentEvent[] = [];
     trackFollowups((e) => events.push(e)).finish();

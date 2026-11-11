@@ -14,7 +14,8 @@ export type IconName =
   | 'release'
   | 'history'
   | 'audit'
-  | 'chevron-down';
+  | 'chevron-down'
+  | 'warning';
 
 /**
  * Stroke icons from the RepoPilot designs, drawn in currentColor. Decorative
@@ -84,6 +85,10 @@ export type IconName =
         }
         @case ('chevron-down') {
           <path d="M6 9l6 6 6-6" />
+        }
+        @case ('warning') {
+          <path d="M12 3.5L2.5 20h19L12 3.5z" />
+          <path d="M12 10v4.5M12 17.5v.01" />
         }
       }
     </svg>

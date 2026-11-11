@@ -266,6 +266,11 @@ export const PrReviewProps = z.object({
   /** GitHub refuses Approve / Request changes on your own pull request. */
   allowedEvents: z.array(ReviewEvent).min(1).max(3),
   eventNote: z.string().max(200).optional(),
+  /**
+   * Set by the server when the PR description reads like a prompt injection: the
+   * flagged sentence (untrusted text, shown as text). Never from the model.
+   */
+  injectionWarning: z.string().max(200).optional(),
   status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
   /** After a decision: the comment ids that were posted. */
   selected: z.array(z.number().int().positive()).max(20).optional(),

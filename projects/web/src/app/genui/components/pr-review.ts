@@ -32,6 +32,21 @@ const EVENTS: { value: ReviewEvent; label: string }[] = [
       <app-pr-header [pr]="p.pr" />
     }
 
+    @if (p.injectionWarning) {
+      <!-- Set by the server's own check, never by the model. The quote is untrusted text, shown as text. -->
+      <div role="note" class="card flex items-start gap-3 border-border-strong p-card" [attr.aria-labelledby]="id('injection')">
+        <app-icon name="warning" class="mt-0.5" />
+        <div class="flex min-w-0 flex-col gap-1.5">
+          <p [id]="id('injection')" class="text-body-md font-semibold">Possible prompt injection in the description</p>
+          <p class="text-body-sm text-fg-muted">
+            The pull request description contains text addressed to an AI. RepoPilot treated it as data and did not
+            follow it. Nothing is posted until you submit.
+          </p>
+          <blockquote class="border-l-2 border-border-strong pl-3 font-mono text-body-sm break-words">{{ p.injectionWarning }}</blockquote>
+        </div>
+      </div>
+    }
+
     <div class="flex flex-wrap items-start gap-5">
       <div class="flex min-w-0 flex-[3_1_520px] flex-col gap-4">
         @if (p.comments.length === 0) {
