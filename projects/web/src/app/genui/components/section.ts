@@ -8,10 +8,10 @@ import { GenUiHost } from '../genui-host';
   host: { class: 'block' },
   template: `
     <section class="flex flex-col gap-4" [attr.aria-label]="props().title">
-      <header>
-        <h2 class="text-lg font-semibold text-ink">{{ props().title }}</h2>
+      <header class="flex flex-col gap-1">
+        <h2 class="font-display text-h2">{{ props().title }}</h2>
         @if (props().description) {
-          <p class="mt-0.5 text-sm text-muted">{{ props().description }}</p>
+          <p class="text-body-sm text-fg-muted">{{ props().description }}</p>
         }
       </header>
       @for (child of props().children; track $index) {

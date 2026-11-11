@@ -1,0 +1,277 @@
+import { afterRenderEffect, Component, computed, effect, ElementRef, inject, input, OnInit, untracked, viewChild } from '@angular/core';
+import { Router } from '@angular/router';
+import { isToolStepId, type EmitFn } from '@repopilot/shared';
+import { visibleSurfaces, type Turn } from '../../core/agent-run';
+import { AgentSession } from '../../core/agent-session';
+import { formatWhen } from '../../core/api';
+import { ServerStatus } from '../../core/server-status';
+import { StepTimeline } from '../../genui/components/step-timeline';
+import { GenUiHost } from '../../genui/genui-host';
+import { Icon } from '../../shared/ui/icon';
+
+const SUGGESTIONS = [
+  'Show my open PRs',
+  'Give me a health report of the repo',
+  'List wontfix issues',
+  'Which PRs have failing CI or no reviewers?',
+];
+
+/** Catalog name of a node, for the "Rendered by agent" badge. */
+function componentOf(node: unknown): string {
+  const name = (node as { component?: unknown } | null)?.component;
+  return typeof name === 'string' ? name.slice(0, 40) : 'UI';
+}
+
+@Component({
+  selector: 'app-chat',
+  imports: [GenUiHost, StepTimeline, Icon],
+  host: { class: 'flex flex-1 flex-col' },
+  template: `
+    <!-- Top bar (Screen Spec: Ask only): repo path, GitHub API quota, the account the token belongs to. -->
+    <header class="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-8">
+      @if (status.repo(); as repo) {
+        <span class="font-mono text-body-md text-fg-muted">
+          {{ repo.owner }} / <span class="text-fg">{{ repo.name }}</span>
+        </span>
+      } @else if (status.health.error()) {
+        <span class="text-body-sm text-danger">Agent server not reachable</span>
+      } @else {
+        <span></span>
+      }
+      <div class="flex items-center gap-4">
+        @if (status.quota(); as q) {
+          <span class="text-body-sm text-fg-muted" title="GitHub API points left this hour">
+            API quota <span class="font-mono text-fg tabular-nums">{{ q.text }}</span>
+          </span>
+        }
+        @if (status.viewer(); as v) {
+          @if (v.avatarUrl) {
+            <img [src]="v.avatarUrl" [alt]="'GitHub account: ' + v.login" class="size-8 rounded-full bg-surface-3" width="32" height="32" />
+          } @else {
+            <span class="grid size-8 place-items-center rounded-full bg-surface-3 text-caption font-semibold uppercase" [attr.aria-label]="'GitHub account: ' + v.login">
+              {{ v.login.slice(0, 2) }}
+            </span>
+          }
+        }
+      </div>
+    </header>
+
+    <div class="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-6 px-4 py-8 sm:px-8">
+      @if (session.turns().length === 0) {
+        <div class="mx-auto mt-6 flex max-w-2xl flex-col items-center gap-3 text-center sm:mt-14">
+          <h1 class="font-display text-h1">What do you want to know about your repo?</h1>
+          <p class="text-body text-fg-muted">Ask in plain English. Answers come back as live UI built from real GitHub data.</p>
+        </div>
+      }
+
+      @if (session.reopened(); as r) {
+        <p class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-1 px-4 py-3 text-body-sm text-fg-muted" role="status">
+          <app-icon name="history" [size]="16" />
+          Reopened “{{ r.title }}” from History. Data as captured {{ when(r.capturedAt) }}; ask again for fresh data.
+        </p>
+      }
+      @if (session.loadError(); as e) {
+        <p class="card border-danger p-4 text-body-sm" role="alert">Could not reopen the session: {{ e }}</p>
+      }
+
+      <ol class="flex flex-col gap-8" aria-label="Conversation" aria-live="polite">
+        @for (turn of session.turns(); track turn.id) {
+          <li class="flex flex-col gap-4">
+            <p class="ml-auto max-w-[min(520px,85%)] rounded-lg rounded-br-sm bg-surface-3 px-4 py-3 text-body">
+              {{ turn.prompt }}
+            </p>
+
+            @if (turn.steps.length) {
+              <app-step-timeline [props]="{ steps: turn.steps }" [inline]="true" />
+            }
+            @if (thinking(turn)) {
+              <p class="flex items-center gap-2 text-body-md text-fg-muted" role="status">
+                <span class="grid size-5 place-items-center" aria-hidden="true">
+                  <span class="size-4 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+                </span>
+                Thinking…
+              </p>
+            }
+
+            @for (surface of surfacesOf(turn); track surface.surfaceId) {
+              @let name = componentName(surface.node);
+              @if (name === 'ApprovalCard' || name === 'PrReview' || name === 'ReleaseForm') {
+                <!-- Built by the server, not the agent: it carries its own risk badge and frame. -->
+                <app-genui-host class="animate-genui-enter" [node]="surface.node" [emit]="onEmit" />
+              } @else {
+                <section class="agent-surface flex animate-genui-enter flex-col gap-4 p-4 sm:p-6" aria-label="Generated by the agent">
+                  <span class="badge badge-agent self-end">
+                    <span class="size-1.5 rounded-full bg-fg" aria-hidden="true"></span>
+                    Rendered by agent · {{ name }}
+                  </span>
+                  <app-genui-host [node]="surface.node" [emit]="onEmit" />
+                </section>
+              }
+            }
+
+            <!-- A tool is fetching data: reserve the space its surface will take, so nothing jumps. -->
+            @for (step of loadingSteps(turn); track step.id) {
+              <div class="agent-surface flex flex-col gap-4 p-4 sm:p-6" aria-hidden="true">
+                <div class="h-6 w-48 animate-pulse self-end rounded-full bg-surface-3"></div>
+                <div class="h-8 w-2/3 animate-pulse rounded-sm bg-surface-3"></div>
+                <div class="h-36 animate-pulse rounded-lg bg-surface-3"></div>
+              </div>
+            }
+
+            @if (turn.actionError) {
+              <p class="card border-danger px-4 py-3 text-body-sm" role="alert">Your decision was not sent: {{ turn.actionError }}</p>
+            }
+
+            @if (turn.text) {
+              <p class="max-w-[680px] text-body whitespace-pre-line text-fg-muted">{{ turn.text }}</p>
+            }
+
+            @if (turn.status === 'error') {
+              <div class="card flex items-center justify-between gap-3 border-danger p-4" role="alert">
+                <span class="text-body-sm text-fg">{{ turn.error }}</span>
+                <button type="button" class="btn shrink-0" (click)="ask(turn.prompt)" [disabled]="session.isBusy()">
+                  <app-icon name="refresh" /> Retry
+                </button>
+              </div>
+            }
+          </li>
+        }
+      </ol>
+      <div #end></div>
+
+      <form class="sticky bottom-0 mt-auto flex flex-col gap-3 bg-bg pt-2 pb-4" (submit)="submit($event)">
+        @if (chips().length) {
+          <div class="flex flex-wrap gap-2" role="group" [attr.aria-label]="session.turns().length ? 'Suggested follow-ups' : 'Suggestions'">
+            @for (s of chips(); track s) {
+              <button type="button" class="chip" (click)="ask(s)" [disabled]="locked()">{{ s }}</button>
+            }
+          </div>
+        }
+        <div
+          class="flex items-end gap-3 rounded-lg border border-border-strong bg-surface-1 py-2.5 pr-2.5 pl-4.5 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus"
+        >
+          <label for="prompt" class="sr-only">Ask RepoPilot</label>
+          <textarea
+            #promptBox
+            id="prompt"
+            rows="1"
+            class="max-h-40 min-h-11 flex-1 resize-none bg-transparent py-2.5 text-body text-fg outline-none placeholder:text-fg-faint disabled:cursor-not-allowed"
+            [placeholder]="session.awaitingApproval() ? 'Resolve the approval first' : 'Ask anything about this repo…'"
+            [disabled]="session.awaitingApproval()"
+            [value]="draft()"
+            (input)="draft.set(promptBox.value)"
+            (keydown.enter)="onEnter($event)"
+          ></textarea>
+          @if (session.turns().length) {
+            <button type="button" class="btn btn-ghost" (click)="newChat()" [disabled]="session.isBusy()">New chat</button>
+          }
+          <button
+            type="submit"
+            class="btn btn-primary size-11 px-0"
+            [attr.aria-label]="session.isBusy() ? 'Working' : 'Send'"
+            [disabled]="locked() || !draft().trim()"
+          >
+            @if (session.isBusy()) {
+              <span class="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true"></span>
+            } @else {
+              <app-icon name="send" [size]="20" [stroke]="2.2" />
+            }
+          </button>
+        </div>
+      </form>
+    </div>
+  `,
+})
+export class Chat implements OnInit {
+  protected readonly session = inject(AgentSession);
+  protected readonly status = inject(ServerStatus);
+  private readonly router = inject(Router);
+  protected readonly suggestions = SUGGESTIONS;
+  protected readonly draft = this.session.draft;
+  protected readonly componentName = componentOf;
+  protected readonly surfacesOf = visibleSurfaces;
+  private readonly end = viewChild.required<ElementRef<HTMLElement>>('end');
+  private readonly promptBox = viewChild.required<ElementRef<HTMLTextAreaElement>>('promptBox');
+
+  /** Tool steps still running: each gets a placeholder until its UI arrives. */
+  /** The run is live but no step is spinning yet (or between steps): show that the model is working. */
+  protected thinking(turn: Turn) {
+    return turn.status === 'running' && !turn.steps.some((s) => s.status === 'running');
+  }
+
+  protected loadingSteps(turn: Turn) {
+    return turn.steps.filter((s) => s.status === 'running' && isToolStepId(s.id));
+  }
+
+  /** Prompt handed over from the landing page (`/ask?q=…`). */
+  readonly q = input<string>();
+  /** A saved session to reopen (`/ask?session=<id>`, from History). */
+  readonly sessionParam = input<string>(undefined, { alias: 'session' });
+  protected readonly when = formatWhen;
+
+  /** User actions inside rendered components; approvals resume the paused run. */
+  protected readonly onEmit: EmitFn = this.session.handleUiEvent;
+
+  /** Starter prompts before the first turn; afterwards the follow-ups the server sent for the last answer. */
+  protected readonly chips = computed(() => {
+    const last = this.session.turns().at(-1);
+    if (!last) return this.suggestions;
+    return last.status === 'done' ? (last.followups ?? []) : [];
+  });
+
+  /** No new prompt while the agent works or a card waits for a decision. */
+  protected readonly locked = computed(() => this.session.isBusy() || this.session.awaitingApproval());
+
+  constructor() {
+    // A finished run changes the open counts and the API quota in the chrome.
+    let wasBusy = false;
+    effect(() => {
+      const busy = this.session.isBusy();
+      if (wasBusy && !busy) untracked(() => this.status.overview.reload());
+      wasBusy = busy;
+    });
+    // Keep the newest output in view as it streams in.
+    afterRenderEffect(() => {
+      this.session.turns();
+      this.end().nativeElement.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    });
+    // "Edit request" put the prompt back: let the user rephrase it straight away.
+    afterRenderEffect(() => {
+      if (this.session.composerFocus() > 0) this.promptBox().nativeElement.focus();
+    });
+  }
+
+  ngOnInit() {
+    const id = this.sessionParam();
+    if (id && /^[0-9a-f-]{36}$/i.test(id)) {
+      if (this.session.sessionId !== id) void this.session.load(id);
+      return;
+    }
+    const q = this.q()?.trim();
+    if (!q) return;
+    // Drop the query so a reload does not ask again.
+    void this.router.navigate([], { queryParams: {}, replaceUrl: true });
+    if (!this.locked()) this.ask(q.slice(0, 2000));
+  }
+
+  protected ask(prompt: string) {
+    this.draft.set('');
+    void this.session.send(prompt);
+  }
+
+  protected submit(event: Event) {
+    event.preventDefault();
+    if (!this.locked()) this.ask(this.draft());
+  }
+
+  protected onEnter(event: Event) {
+    const key = event as KeyboardEvent;
+    if (key.shiftKey || key.isComposing) return;
+    this.submit(event);
+  }
+
+  protected newChat() {
+    this.session.reset();
+    void this.router.navigate([], { queryParams: {}, replaceUrl: true });
+  }
+}

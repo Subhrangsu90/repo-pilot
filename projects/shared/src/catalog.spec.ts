@@ -1,4 +1,4 @@
-import { componentNames, validateNode } from './catalog';
+import { catalog, CatalogEntry, componentNames, validateNode } from './catalog';
 import { buildCatalogPromptDoc } from './prompt';
 import {
   fixtures,
@@ -71,6 +71,23 @@ describe('validateNode', () => {
     expect(validateNode(node('http://avatars.githubusercontent.com/u/1')).ok).toBe(false);
   });
 
+  it('accepts PR branch names but not whitespace or control characters', () => {
+    const pr = (branch: string) => ({ component: 'PrCard', props: { number: 1, title: 't', state: 'open', ageDays: 0, branch } });
+    expect(validateNode(pr('feature/login-rate-limit')).ok).toBe(true);
+    expect(validateNode(pr('fix the bug')).ok).toBe(false);
+    expect(validateNode(pr('a\nb')).ok).toBe(false);
+  });
+
+  it('defaults issue assignees to none and only accepts GitHub logins', () => {
+    const table = (row: object) => ({
+      component: 'IssueTable',
+      props: { rows: [{ number: 1, title: 't', state: 'open', ageDays: 0, ...row }] },
+    });
+    expect(validateNode(table({}))).toMatchObject({ ok: true, props: { rows: [{ assignees: [] }] } });
+    expect(validateNode(table({ assignees: ['octocat'] })).ok).toBe(true);
+    expect(validateNode(table({ assignees: ['<script>'] })).ok).toBe(false);
+  });
+
   it('truncates huge raw payloads', () => {
     const result = validateNode({ component: 'Nope', props: { blob: 'x'.repeat(10_000) } });
     expect(!result.ok && result.raw.length).toBeLessThan(4100);
@@ -93,14 +110,17 @@ describe('fixtures', () => {
 describe('buildCatalogPromptDoc', () => {
   const doc = buildCatalogPromptDoc();
 
+  const isInternal = (n: (typeof componentNames)[number]) => Boolean((catalog[n] as CatalogEntry).internal);
+
   it('lists every component the agent may emit', () => {
-    for (const name of componentNames.filter((n) => n !== 'ErrorFallback')) {
+    for (const name of componentNames.filter((n) => !isInternal(n))) {
       expect(doc).toContain(`### ${name}`);
     }
   });
 
-  it('does not offer ErrorFallback to the model', () => {
-    expect(doc).not.toContain('### ErrorFallback');
+  it('does not offer app-only components to the model (approval surfaces, diffs, steps, errors)', () => {
+    expect(componentNames.filter(isInternal)).toEqual(['ApprovalCard', 'DiffViewer', 'PrReview', 'ReleaseForm', 'StepTimeline', 'ErrorFallback']);
+    for (const name of componentNames.filter(isInternal)) expect(doc).not.toContain(`### ${name}`);
   });
 
   it('includes JSON Schema for props', () => {

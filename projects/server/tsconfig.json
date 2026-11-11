@@ -8,7 +8,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noImplicitOverride": true,
-    "types": ["node"]
+    "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts"]
 }

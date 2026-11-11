@@ -1,83 +1,235 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens. Tailwind v4 turns each --color-* into utilities
- * (bg-surface, text-muted, border-border, fill-accent, ...). Dark mode swaps
- * the variables, so components never need dark: variants.
+ * RepoPilot design system (graphite monochrome).
+ * Source of truth: https://claude.ai/artifact/Tb41Yu1ZK5M24zNnKxMoGX (project/tokens.json).
+ *
+ * 1. The raw tokens keep the design-system names (--bg, --surface-2, --text-muted, ...)
+ *    so CSS can use var(--surface-2) exactly as the README says.
+ * 2. @theme inline maps them to Tailwind utilities. Because Tailwind's `text-*`
+ *    namespace is font sizes, the three text colours become fg / fg-muted / fg-faint:
+ *      DS token     Tailwind utility
+ *      text         text-fg
+ *      text-muted   text-fg-muted
+ *      text-faint   text-fg-faint     (not on surface-3: use fg-muted there)
+ *    Everything else keeps its name: bg-surface-2, border-border-strong, bg-risk-soft, ...
+ * 3. Tailwind's default palette is removed, so off-system colours fail to compile into CSS.
+ *
+ * Themes: graphite is the default; `data-theme="light"` on <html> switches.
  */
+
+:root {
+  color-scheme: dark;
+  --bg: #1e1e20;
+  --surface-1: #252527;
+  --surface-2: #2c2c2f;
+  --surface-3: #353538;
+  --border: #3a3a3e;
+  --border-strong: #4a4a4f;
+  --text: #ededef;
+  --text-muted: #b0b0b6;
+  --text-faint: #8e8e95;
+  --primary: #ededef;
+  --on-primary: #1e1e20;
+  --focus: #ededef;
+  --risk: #e8a33d;
+  --on-risk: #1e1e20;
+  --risk-soft: rgba(232, 163, 61, 0.14);
+  --success: #4cb782;
+  --success-soft: rgba(76, 183, 130, 0.14);
+  --danger: #e5636b;
+  --danger-soft: rgba(229, 99, 107, 0.14);
+  --neutral-soft: rgba(237, 237, 239, 0.08);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f4f5;
+  --surface-1: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #ebebed;
+  --border: #dadade;
+  --border-strong: #c4c4c9;
+  --text: #1e1e20;
+  --text-muted: #55555b;
+  --text-faint: #6e6e75;
+  --primary: #1e1e20;
+  --on-primary: #ffffff;
+  --focus: #1e1e20;
+  --risk: #a65f00;
+  --on-risk: #ffffff;
+  --risk-soft: rgba(166, 95, 0, 0.1);
+  --success: #1e7d4f;
+  --success-soft: rgba(30, 125, 79, 0.1);
+  --danger: #c23b44;
+  --danger-soft: rgba(194, 59, 68, 0.1);
+  --neutral-soft: rgba(30, 30, 32, 0.06);
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-fg-muted: var(--text-muted);
+  --color-fg-faint: var(--text-faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-focus: var(--focus);
+  --color-risk: var(--risk);
+  --color-on-risk: var(--on-risk);
+  --color-risk-soft: var(--risk-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-neutral-soft: var(--neutral-soft);
+}
+
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
-  --color-canvas: #f5f6f8;
-  --color-surface: #ffffff;
-  --color-border: #e2e5ea;
-  --color-ink: #15181e;
-  --color-muted: #5b6372;
-  --color-accent: #2b63e0;
-  --color-good: #17804a;
-  --color-warning: #b25808;
-  --color-danger: #c4352b;
-}
+  /* Type styles from tokens.json (text-h1, text-body-sm, ...). */
+  --text-display: 56px;
+  --text-display--line-height: 60px;
+  --text-display--font-weight: 700;
+  --text-display--letter-spacing: -0.03em;
+  --text-h1: 32px;
+  --text-h1--line-height: 40px;
+  --text-h1--font-weight: 600;
+  --text-h1--letter-spacing: -0.01em;
+  --text-h2: 24px;
+  --text-h2--line-height: 32px;
+  --text-h2--font-weight: 600;
+  --text-stat: 34px;
+  --text-stat--line-height: 40px;
+  --text-stat--font-weight: 600;
+  --text-body: 15px;
+  --text-body--line-height: 24px;
+  --text-body-md: 14px;
+  --text-body-md--line-height: 20px;
+  --text-body-sm: 13px;
+  --text-body-sm--line-height: 20px;
+  --text-label: 13px;
+  --text-label--line-height: 18px;
+  --text-label--font-weight: 500;
+  --text-badge: 12px;
+  --text-badge--line-height: 16px;
+  --text-badge--font-weight: 600;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-axis: 11px; /* mono, chart axes only */
+  --text-axis--line-height: 14px;
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --color-canvas: #0e1014;
-    --color-surface: #161a21;
-    --color-border: #272c36;
-    --color-ink: #e7e9ee;
-    --color-muted: #98a1b0;
-    --color-accent: #7ea3ff;
-    --color-good: #4cc38a;
-    --color-warning: #f0b34a;
-    --color-danger: #ff7a70;
+  /* Spacing: Tailwind's 4px scale (p-3 = space-3, p-5 = space-5, ...) plus the one off-scale step. */
+  --spacing-card: 18px; /* space-card: small data cards */
+
+  /* Radius grows with the container. */
+  --radius-xs: 7px; /* segments of a segmented control */
+  --radius-sm: 8px; /* nav items, code blocks */
+  --radius-md: 10px; /* buttons and inputs */
+  --radius-lg: 14px; /* cards */
+  --radius-xl: 18px; /* agent surfaces */
+
+  --animate-genui-enter: genui-enter 180ms ease-out both;
+
+  @keyframes genui-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
   }
-}
-
-:root[data-theme='dark'] {
-  --color-canvas: #0e1014;
-  --color-surface: #161a21;
-  --color-border: #272c36;
-  --color-ink: #e7e9ee;
-  --color-muted: #98a1b0;
-  --color-accent: #7ea3ff;
-  --color-good: #4cc38a;
-  --color-warning: #f0b34a;
-  --color-danger: #ff7a70;
 }
 
 @layer base {
-  html {
-    color-scheme: light dark;
-  }
-
   body {
-    @apply bg-canvas font-sans text-ink antialiased;
+    @apply bg-bg font-sans text-body text-fg antialiased;
   }
 
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-accent;
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @layer components {
+  /* Cards inside panels. */
   .card {
-    @apply rounded-xl border border-border bg-surface;
+    @apply rounded-lg border border-border bg-surface-2;
   }
 
+  /* A surface the agent composed (dashboard, approval card). */
+  .agent-surface {
+    @apply rounded-xl border border-border bg-surface-1 p-6;
+  }
+
+  /* Buttons: at most one filled (primary or risk) per surface; 44px tall. */
   .btn {
-    @apply inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-canvas disabled:opacity-50;
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-border-strong bg-transparent px-4 text-body-md font-medium text-fg transition-colors hover:bg-neutral-soft;
   }
-
   .btn-primary {
-    @apply border-transparent bg-accent text-white hover:bg-accent/90;
+    @apply border-transparent bg-primary font-semibold text-on-primary hover:bg-primary/90;
+  }
+  .btn-risk {
+    @apply border-transparent bg-risk font-semibold text-on-risk hover:bg-risk/90;
+  }
+  .btn-ghost {
+    @apply border-transparent text-fg-muted hover:text-fg;
+  }
+  /* text-muted, not text-faint: faint fails contrast on surface-3. */
+  .btn:disabled {
+    @apply cursor-not-allowed border-transparent bg-surface-3 text-fg-muted;
   }
 
+  /* Suggestion chips (pill buttons), 44px like every control. */
   .chip {
-    @apply inline-flex items-center rounded-full border border-border px-2 py-0.5 text-xs text-muted;
+    @apply inline-flex min-h-11 cursor-pointer items-center rounded-full border border-border-strong bg-transparent px-3.5 text-body-sm text-fg-muted transition-colors hover:bg-neutral-soft hover:text-fg disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  /* Badges: one short phrase, always a word, never colour alone. */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-neutral-soft px-2.5 py-1 text-badge whitespace-nowrap text-fg-muted;
+  }
+  .badge-write {
+    @apply text-fg;
+  }
+  .badge-risk {
+    @apply bg-risk-soft text-risk;
+  }
+  .badge-success {
+    @apply bg-success-soft text-success;
+  }
+  .badge-danger {
+    @apply bg-danger-soft text-danger;
+  }
+  .badge-agent {
+    @apply border border-border-strong bg-transparent font-mono font-normal;
+  }
+
+  .field {
+    @apply h-11 rounded-md border border-border-strong bg-surface-2 px-3.5 text-body text-fg placeholder:text-fg-faint;
   }
 
   .checkbox {
-    @apply size-4 cursor-pointer accent-accent;
+    @apply size-4.5 shrink-0 cursor-pointer accent-primary;
+  }
+  .checkbox-risk {
+    @apply accent-risk;
   }
 }

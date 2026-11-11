@@ -9,6 +9,8 @@
   "scripts": {
     "dev:web": "npm run start -w @repopilot/web",
     "dev:server": "npm run dev -w @repopilot/server",
+    "db:up": "docker compose up -d --wait db",
+    "db:down": "docker compose stop db",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

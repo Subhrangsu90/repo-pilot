@@ -30,6 +30,11 @@ const ConfigSchema = z.object({
 
   OLLAMA_URL: z.url().default('http://localhost:11434'),
   OLLAMA_MODEL: z.string().default('gemma4'),
+  // Context window for local models; bounds the memory Ollama reserves for it.
+  OLLAMA_NUM_CTX: z.coerce.number().int().min(2048).max(131072).default(8192),
+
+  // Postgres (docker-compose.yml). Optional: without it the server keeps state in memory only.
+  DATABASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
 
   GITHUB_TOKEN: z.string().optional(),
   GITHUB_REPO_ALLOWLIST: z

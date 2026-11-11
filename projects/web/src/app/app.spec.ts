@@ -7,11 +7,17 @@ describe('App', () => {
     TestBed.configureTestingModule({ imports: [App], providers: [provideRouter([])] });
   });
 
-  it('renders the shell with the brand and main navigation', async () => {
+  it('renders the skip link and a router outlet', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('h1')?.textContent).toContain('RepoPilot');
-    expect(el.querySelector('nav a')?.textContent).toContain('Playground');
+    expect(el.querySelector('a[href="#main"]')?.textContent).toContain('Skip to content');
+    expect(el.querySelector('router-outlet')).not.toBeNull();
+  });
+
+  it('applies the graphite theme by default', async () => {
+    const fixture = TestBed.createComponent(App);
+    await fixture.whenStable();
+    expect(document.documentElement.dataset['theme']).toBe('graphite');
   });
 });
