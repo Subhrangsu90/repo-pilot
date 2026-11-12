@@ -87,6 +87,8 @@ export const IssueRow = z.object({
   // Shown in the table (design system: "labels, assignee and age").
   assignees: z.array(githubLogin).max(10).default([]),
   ageDays: z.number().int().nonnegative(),
+  /** The server flagged the title as a possible prompt injection (shown as a warning badge). */
+  injection: z.boolean().optional(),
 });
 
 export const IssueTableProps = z.object({
@@ -138,6 +140,8 @@ export const PrCardProps = z.object({
   deletions: z.number().int().nonnegative().optional(),
   // Links only to github.com over https.
   url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+  /** The server flagged the title as a possible prompt injection (shown as a warning badge). */
+  injection: z.boolean().optional(),
 });
 
 export const PrListProps = z.object({

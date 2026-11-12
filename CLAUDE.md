@@ -190,7 +190,12 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       (its claim is held back), then the summary-only fallback drafts it; (3) PR diff Sections got
       health-report chips → `surfaceKey()` keys them `PullRequestDiff`. Re-verified live on #16:
       Gemma and Gemini both drafted a real PrReview with the warning and mentioned the injection;
-      rejected, nothing posted. Issue and PR titles are not checked yet. `ng test` sometimes prints
+      rejected, nothing posted. Titles (2026-11-12): `markTitles()` / `titleWarning()` flag issue and
+      PR titles in `list_issues`, `list_pull_requests`, `get_repo_health` (oldest issues) and
+      `get_release_changes` (model note only, no UI); flagged rows/cards carry `injection: true`
+      (IssueRow, PrCard) and show `InjectionBadge`; `get_pull_request` and the review dry run check
+      the PR title as well as the body. No false alarms on the demo repo's 17 titles; no planted
+      title injection exists, so the badge is covered by tests only. `ng test` sometimes prints
       "no tests" on the first run after source changes; a re-run passes. Then: Issues page (last dimmed nav link), last-6-turns + summary context (doc §9b
       step 5; needed for the "only show bugs" follow-up), agent naming sessions (now: first line of
       the prompt), Refresh on stale surfaces.

@@ -267,7 +267,7 @@ export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestRev
 
     const carry: ReviewCarry = { headSha: pr.headSha, comments, allowedEvents, event };
     // Checked in code: the warning shows even when the model did not notice the injection.
-    const injection = findInjection(pr.body);
+    const injection = findInjection(pr.info.title) ?? findInjection(pr.body);
     return {
       kind: 'card',
       component: 'PrReview',
