@@ -37,7 +37,7 @@ function setup(provider: LlmProvider, overrides: Partial<AgentDeps> = {}) {
     tools: buildToolDefs(),
     executors: { ...executors, list_pull_requests: prs },
     actions: {},
-    ctx: { github: {} as never, allowlist: ['octo/demo'] },
+    ctx: { github: {} as never, repo: 'octo/demo' },
     emit: (e) => events.push(e),
     runId: 'r1',
     ...overrides,

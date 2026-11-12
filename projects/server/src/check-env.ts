@@ -86,30 +86,15 @@ async function checkGitHub() {
   const expiry = user.headers.get('github-authentication-token-expiration');
   report('GitHub token', true, `authenticated as ${login}${expiry ? `, expires ${expiry}` : ''}, rate limit left ${user.headers.get('x-ratelimit-remaining')}`);
 
-  if (config.GITHUB_REPO_ALLOWLIST.length === 0) return report('GitHub repos', false, 'GITHUB_REPO_ALLOWLIST is empty');
-  for (const repo of config.GITHUB_REPO_ALLOWLIST) {
-    const r = await gh(`/repos/${repo}`);
-    if (!r.ok) {
-      report(repo, false, `HTTP ${r.status}: token cannot see this repo (check the name and the token's repository access)`);
-      continue;
-    }
-    const info = (await r.json()) as { private: boolean; default_branch: string; open_issues_count: number };
-    report(repo, true, `${info.private ? 'private' : 'public'}, default branch ${info.default_branch}`);
+  // The repositories the app's picker will list for the token owner (dev mode).
+  const repos = await gh('/user/repos?per_page=100&affiliation=owner,collaborator,organization_member');
+  if (!repos.ok) return report('GitHub repos', false, `HTTP ${repos.status}: cannot list repositories`);
+  const list = (await repos.json()) as { private: boolean }[];
+  const priv = list.filter((r) => r.private).length;
+  report('GitHub repos', list.length > 0, list.length ? `${list.length} visible (${priv} private)` : 'the token can see no repositories');
 
-    // Read permissions the week-2 tools need. 404/403 here means the permission is missing.
-    const scopes: [string, string][] = [
-      ['Contents: read', `/repos/${repo}/contents/`],
-      ['Issues: read', `/repos/${repo}/issues?per_page=1`],
-      ['Pull requests: read', `/repos/${repo}/pulls?per_page=1`],
-      ['Actions: read', `/repos/${repo}/actions/runs?per_page=1`],
-    ];
-    for (const [label, path] of scopes) {
-      const res = await gh(path);
-      // An empty repo returns 404 for contents even with permission.
-      const emptyRepo = label.startsWith('Contents') && res.status === 404;
-      report(`  ${label}`, res.ok || emptyRepo, res.ok ? 'ok' : emptyRepo ? 'repo is empty (add a README so tools have content)' : `HTTP ${res.status}`);
-    }
-  }
+  const oauth = [config.GITHUB_OAUTH_CLIENT_ID, config.GITHUB_OAUTH_CLIENT_SECRET, config.SESSION_SECRET].filter(Boolean).length;
+  report('GitHub sign-in', oauth === 0 || oauth === 3, oauth === 3 ? `OAuth on, scope ${config.GITHUB_OAUTH_SCOPE}` : oauth === 0 ? 'off (dev mode)' : 'set all of GITHUB_OAUTH_CLIENT_ID, _SECRET and SESSION_SECRET, or none');
 }
 
 await Promise.allSettled([checkGemini(), checkClaude(), checkOllama(), checkGitHub()]).then((settled) => {

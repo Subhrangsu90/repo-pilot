@@ -2,6 +2,7 @@ import { Component, computed, inject, linkedSignal } from '@angular/core';
 import { valueOf } from '../../core/resource';
 import { EmitFn } from '@repopilot/shared';
 import { AgentSession } from '../../core/agent-session';
+import { onRepoSwitch } from '../../core/repo';
 import { ServerStatus } from '../../core/server-status';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
@@ -94,6 +95,11 @@ export function nextMinor(tag: string | null | undefined): string {
 })
 export class ReleaseBuilder {
   protected readonly session = inject(AgentSession);
+
+  constructor() {
+    // A draft for another repository no longer applies.
+    onRepoSwitch(() => this.session.reset());
+  }
   private readonly status = inject(ServerStatus);
 
   /** Starts as "Draft release v1.1.0 from everything since v1.0.0", from the latest release. */

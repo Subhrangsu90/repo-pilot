@@ -6,6 +6,7 @@ import { filter, map } from 'rxjs';
 import { ModelChoice } from '../core/model-choice';
 import { ServerStatus } from '../core/server-status';
 import { Auth } from '../core/auth';
+import { RepoChoice, type RepoItem } from '../core/repo';
 import { REGISTRY } from '../genui/registry';
 import { GENUI_REGISTRY } from '../genui/registry-token';
 import { Theme } from '../core/theme';
@@ -23,7 +24,6 @@ interface NavItem {
 /**
  * The six links of the Screen Spec, in its order. Pull requests, Issues,
  * Releases, History and Audit log get a `path` as each page is built.
- * (/playground is a dev tool and deliberately not in the menu.)
  */
 const NAV: NavItem[] = [
   { label: 'Ask', icon: 'ask', path: '/ask' },
@@ -58,13 +58,35 @@ const MODELS: { value: ModelOption; label: string }[] = [
     >
       <a routerLink="/" class="self-start rounded-sm px-2 py-1" aria-label="RepoPilot home"><app-logo /></a>
 
-      @if (status.repo(); as repo) {
-        <!-- Repo switcher: one allowlisted repo for now, so there is no menu yet. -->
-        <p class="flex min-h-11 items-center justify-between gap-2 rounded-md border border-border-strong bg-bg px-3 font-mono text-body-sm text-fg">
-          <span><span class="sr-only">Repository: </span>{{ repo.name }}</span>
-          <app-icon name="chevron-down" [size]="16" class="text-fg-muted" />
-        </p>
-      }
+      <!-- Every repository the user can access (public and private). Pages and the agent work on this one. -->
+      <div class="flex flex-col gap-1.5">
+        <label for="repo-picker" class="px-1 text-caption text-fg-faint">Repository</label>
+        @if (repos.repos().length) {
+          <div class="relative">
+            <select
+              id="repo-picker"
+              class="field w-full cursor-pointer appearance-none pr-9 font-mono text-body-sm"
+              [value]="repos.selected() ?? ''"
+              [title]="repos.selected() ?? ''"
+              (change)="pick($event)"
+            >
+              @for (r of repos.repos(); track r.full) {
+                <option [value]="r.full" [selected]="r.full === repos.selected()">{{ label(r) }}</option>
+              }
+            </select>
+            <app-icon name="chevron-down" [size]="16" class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-fg-muted" />
+          </div>
+        } @else if (repos.list.isLoading()) {
+          <div class="h-11 animate-pulse rounded-md bg-surface-3" aria-hidden="true"></div>
+        } @else if (repos.list.error()) {
+          <p class="flex flex-wrap items-center gap-2 px-1 text-body-sm text-fg-muted" role="alert">
+            Could not list your repositories.
+            <button type="button" class="btn btn-ghost px-3" (click)="repos.list.reload()">Retry</button>
+          </p>
+        } @else {
+          <p class="px-1 text-body-sm text-fg-muted">Your GitHub account has no repositories RepoPilot can see.</p>
+        }
+      </div>
 
       <ul class="flex flex-col gap-1">
         @for (item of nav; track item.label) {
@@ -138,6 +160,19 @@ export class Shell {
   protected readonly model = inject(ModelChoice);
   protected readonly theme = inject(Theme);
   protected readonly auth = inject(Auth);
+  protected readonly repos = inject(RepoChoice);
+
+  /** "repo-pilot", "site · private", "js-loops · chaicodehq": the owner only when it is not you. */
+  protected label(r: RepoItem): string {
+    const [owner, name] = r.full.split('/');
+    const mine = owner.toLowerCase() === (this.auth.user()?.login ?? '').toLowerCase();
+    return [name, mine ? null : owner, r.private ? 'private' : null].filter(Boolean).join(' · ');
+  }
+
+  protected pick(event: Event) {
+    const full = (event.target as HTMLSelectElement).value;
+    if (full) this.repos.select(full);
+  }
   protected readonly nav = NAV;
   protected readonly models = MODELS;
 

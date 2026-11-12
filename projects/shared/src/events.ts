@@ -91,6 +91,8 @@ export interface StartRunRequest {
   model?: ModelOption;
   /** The PR review page: the run must end on a review draft of this pull request. */
   reviewPullRequest?: number;
+  /** "owner/name" picked in the app; a conversation stays on the repo it started with. */
+  repo?: string;
 }
 
 export interface StartRunResponse {

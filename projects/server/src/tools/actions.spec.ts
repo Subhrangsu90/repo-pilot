@@ -27,7 +27,7 @@ function fakeCtx() {
       return ISSUES[n];
     },
   };
-  const ctx = { github, allowlist: ['octo/demo'] } as unknown as ToolContext;
+  const ctx = { github, repo: 'octo/demo' } as unknown as ToolContext;
   return { ctx, patches };
 }
 
@@ -60,9 +60,12 @@ describe('bulk_update_issues', () => {
     expect(plan).toMatchObject({ kind: 'empty', data: { nothingToChange: true } });
   });
 
-  it('refuses repositories outside the allowlist', async () => {
+  it('refuses any repository but the one the user selected, even when the model names another', async () => {
     const { ctx } = fakeCtx();
-    await expect(bulkUpdateIssuesTool.plan({ ...input([118]), repo: 'evil/repo' }, ctx)).rejects.toThrow('not allowed');
+    await expect(bulkUpdateIssuesTool.plan({ ...input([118]), repo: 'evil/repo' }, ctx)).rejects.toThrow('works on octo/demo only');
+    await expect(bulkUpdateIssuesTool.plan(input([118]), { ...ctx, repo: undefined })).rejects.toThrow('No repository is selected');
+    // Same repository in another case is fine.
+    await expect(bulkUpdateIssuesTool.plan({ ...input([118]), repo: 'Octo/Demo' }, ctx)).resolves.toBeTruthy();
   });
 
   it('closes exactly the given ids as not planned and reports partial failure', async () => {

@@ -54,11 +54,6 @@ export const routes: Routes = [
         title: 'Audit log · RepoPilot',
         loadComponent: () => import('./features/audit/audit-log').then((m) => m.AuditLog),
       },
-      {
-        path: 'playground',
-        title: 'Playground · RepoPilot',
-        loadComponent: () => import('./features/playground/playground').then((m) => m.Playground),
-      },
     ],
   },
   { path: '**', redirectTo: '' },

@@ -28,7 +28,7 @@ export interface AuthOptions {
   /** Where the app is served (the OAuth callback is APP_URL/api/auth/callback). */
   appUrl: string;
   scope: string;
-  /** The GitHub client for token mode (GITHUB_TOKEN, or the E2E fake). */
+  /** The GitHub client for token mode (GITHUB_TOKEN). */
   tokenGithub: GitHub;
 }
 
@@ -49,7 +49,7 @@ const STATE_COOKIE = 'rp_oauth_state';
 const SESSION_TTL_MS = 8 * 60 * 60_000;
 const STATE_TTL_MS = 10 * 60_000;
 /** Paths that work without signing in. */
-const PUBLIC = /^\/api\/(auth\/|health$|__test__\/)/;
+const PUBLIC = /^\/api\/(auth\/|health$)/;
 
 export type Auth = ReturnType<typeof createAuth>;
 

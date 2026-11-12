@@ -4,6 +4,7 @@ import { Component, computed, effect, inject, linkedSignal, signal, untracked } 
 import type { EmitFn, PropsOf, UiEvent, UiNode } from '@repopilot/shared';
 import { AgentSession } from '../../core/agent-session';
 import { ServerStatus } from '../../core/server-status';
+import { onRepoSwitch, RepoChoice } from '../../core/repo';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
 
@@ -151,7 +152,11 @@ export class IssueList {
 
   protected readonly states = STATES;
   protected readonly state = signal<State>('open');
-  protected readonly issues = httpResource<IssuesResponse>(() => ({ url: '/api/issues', params: { state: this.state() } }));
+  private readonly repo = inject(RepoChoice).selected;
+  protected readonly issues = httpResource<IssuesResponse>(() => {
+    const repo = this.repo();
+    return repo ? { url: '/api/issues', params: { state: this.state(), repo } } : undefined;
+  });
 
   /** Every label on the loaded issues, for the filter chips. */
   protected readonly truncated = computed(() => valueOf(this.issues)?.truncated ?? false);
@@ -202,6 +207,8 @@ export class IssueList {
   };
 
   constructor() {
+    // Another repository: the old request and its approval card no longer apply.
+    onRepoSwitch(() => this.session.reset());
     // When a run settles (approved, rejected or failed), show the issues as they are now.
     let wasActive = false;
     effect(() => {

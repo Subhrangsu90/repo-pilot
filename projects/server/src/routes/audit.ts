@@ -3,7 +3,7 @@ import * as z from 'zod';
 import { GitHubError } from '../github/client';
 import { auditSeq, type Store } from '../store';
 import { ToolError, type ToolContext } from '../tools/read-tools';
-import { runInverse } from '../tools/undo';
+import { inverseRepo, runInverse } from '../tools/undo';
 
 const ListQuery = z.object({ filter: z.enum(['all', 'write', 'destructive', 'undone']).default('all') });
 
@@ -45,7 +45,10 @@ export function registerAuditRoutes(app: FastifyInstance, store: Store | null, w
 
     undoing.add(seq);
     try {
-      const out = await runInverse(inverse, ctx);
+      // Undo acts on the repository the change was made in (pinned in the inverse, else its session's).
+      const repo = inverseRepo(inverse) ?? (entry.sessionId ? (await store.getSession(entry.sessionId, login))?.repo : undefined);
+      if (!repo) return reply.code(400).send({ error: 'This change does not record its repository, so it cannot be undone from here.' });
+      const out = await runInverse(inverse, { ...ctx, repo });
       if (!out.ok) return reply.code(502).send({ error: out.result });
       await store.markUndone(seq, out.result);
       req.log.info({ id: entry.id, tool: entry.tool }, 'change undone');

@@ -28,7 +28,7 @@ const repoRef = z
   .string()
   .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'Use owner/repo')
   .optional()
-  .describe('owner/repo. Omit to use the default repository.');
+  .describe('owner/repo. Omit it: the app works on the repository the user selected.');
 
 export const listPullRequests = {
   name: 'list_pull_requests',

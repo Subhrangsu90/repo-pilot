@@ -1,11 +1,12 @@
 import { httpResource } from '@angular/common/http';
 import { valueOf } from './resource';
-import { computed, Injectable } from '@angular/core';
+import { computed, inject, Injectable } from '@angular/core';
+import { RepoChoice } from './repo';
 
 /** The non-secret part of GET /api/health. */
 export interface Health {
   llm: { provider: 'gemini' | 'claude' | 'ollama'; model: string };
-  github: { tokenConfigured: boolean; repos: string[] };
+  github: { tokenConfigured: boolean };
 }
 
 /** GET /api/overview: live data for the side nav and the Ask top bar. */
@@ -24,17 +25,16 @@ const AVATAR = /^https:\/\/avatars\.githubusercontent\.com\//;
 /** Shared server requests for the app chrome (shell, model switch, Ask top bar). */
 @Injectable({ providedIn: 'root' })
 export class ServerStatus {
+  private readonly choice = inject(RepoChoice);
   readonly health = httpResource<Health>(() => '/api/health');
-  /** Reload after a run finishes: counts and the API quota change. */
-  readonly overview = httpResource<Overview>(() => '/api/overview');
-
-  /** First allowlisted repo, split for display ("owner / name"). */
-  readonly repo = computed(() => {
-    const full = valueOf(this.health)?.github.repos[0];
-    if (!full) return null;
-    const [owner, name] = full.split('/');
-    return { owner, name: name ?? owner, full };
+  /** For the selected repository. Reload after a run finishes: counts and the API quota change. */
+  readonly overview = httpResource<Overview>(() => {
+    const repo = this.choice.selected();
+    return repo ? { url: '/api/overview', params: { repo } } : undefined;
   });
+
+  /** The selected repo, split for display ("owner / name"). */
+  readonly repo = this.choice.parts;
 
   readonly counts = computed(() => {
     const o = valueOf(this.overview);

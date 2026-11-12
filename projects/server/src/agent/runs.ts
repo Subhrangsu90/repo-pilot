@@ -33,6 +33,8 @@ export interface Thread {
   touched: number;
   /** The GitHub login that started the conversation; only they may continue it or answer its approvals. */
   owner?: string;
+  /** The repository ("owner/name") the conversation works on; set by its first prompt. */
+  repo?: string;
   /** Model picked in the UI when the conversation last ran; resumed runs use it too. */
   model?: ModelOption;
   /** A tool call paused on an ApprovalCard. New prompts are refused until it is answered. */
@@ -67,7 +69,7 @@ export function onRunFinished(fn: (run: FinishedRun, thread: Thread) => void) {
 }
 
 /** Puts a conversation loaded from the database back in memory (after a restart). */
-export function restoreThread(data: Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner'>): Thread {
+export function restoreThread(data: Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner' | 'repo'>): Thread {
   const existing = threads.get(data.id);
   if (existing) return existing;
   const thread: Thread = { ...data, busy: false, touched: Date.now() };
@@ -82,9 +84,9 @@ export function dropThread(id: string) {
   if (thread && !thread.busy) threads.delete(id);
 }
 
-export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string; owner?: string } = {}): StartRunResponse {
+export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string; owner?: string; repo?: string } = {}): StartRunResponse {
   const tid = threadId && threads.has(threadId) ? threadId : randomUUID();
-  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now(), owner: opts.owner };
+  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now(), owner: opts.owner, repo: opts.repo };
   if (thread.busy) throw new ThreadBusyError('This conversation is still running.');
   thread.busy = true;
   thread.touched = Date.now();

@@ -1,16 +1,42 @@
 import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import {
-  healthReport,
-  invalidProps,
-  issuePicker,
-  partiallyBroken,
-  prList,
-  UiEvent,
-  unknownComponent,
-} from '@repopilot/shared';
+import type { UiEvent } from '@repopilot/shared';
 import { GenUiHost } from './genui-host';
 import { provideGenUi } from './registry';
+
+// Sample agent output, inline. Valid nodes must render; broken ones must be contained.
+const stat = (label: string, value: number) => ({ component: 'StatCard', props: { label, value } });
+const issue = (number: number, title: string) => ({ number, title, state: 'open', labels: ['wontfix'], ageDays: 100 });
+const healthReport = {
+  component: 'Section',
+  props: {
+    title: 'Health report',
+    children: [
+      { component: 'Grid', props: { columns: 4, children: [stat('Open PRs', 7), stat('Stale PRs', 3), stat('Open issues', 12), stat('Commits', 40)] } },
+      { component: 'ActivityChart', props: { title: 'Commits per week', kind: 'bar', points: [{ label: 'W1', value: 3 }, { label: 'W2', value: 5 }] } },
+      { component: 'ContributorList', props: { items: [{ login: 'octocat', commits: 12 }] } },
+      { component: 'IssueTable', props: { title: 'Oldest open issues', rows: [issue(12, 'Flaky test')] } },
+    ],
+  },
+};
+const issuePicker = { component: 'IssueTable', props: { selectable: true, rows: [issue(15, 'Dark mode'), issue(31, 'Bazel'), issue(40, 'IE11')] } };
+const unknownComponent = { component: 'ScriptInjector', props: { html: '<img src=x onerror="alert(1)">' } };
+const invalidProps = { component: 'StatCard', props: { label: 'Open PRs', value: 7, tone: 'rainbow' } };
+const partiallyBroken = {
+  component: 'Grid',
+  props: { columns: 3, children: [stat('Open PRs', 7), { component: 'StatCard', props: { label: 'Missing value' } }, stat('Stale PRs', 3)] },
+};
+const PR_URL = 'https://github.com/octocat/hello-world/pull/15';
+const prList = {
+  component: 'PrList',
+  props: {
+    items: [
+      { number: 15, title: 'Add rate limiting', author: 'octocat', state: 'open', ci: 'success', ageDays: 3, url: PR_URL },
+      { number: 16, title: 'Add API reference', author: 'monalisa', state: 'draft', ci: 'pending', ageDays: 2 },
+      { number: 17, title: 'Bump deps', author: 'dependabot[bot]', state: 'open', ci: 'failure', ageDays: 19 },
+    ],
+  },
+};
 
 @Component({
   imports: [GenUiHost],
@@ -77,7 +103,7 @@ describe('GenUiHost', () => {
     expect(cards[1].textContent).toContain('Draft');
     expect(cards[2].textContent).toContain('CI failing');
     const link = cards[0].querySelector('a');
-    expect(link?.getAttribute('href')).toBe('https://github.com/octocat/repopilot-demo/pull/15');
+    expect(link?.getAttribute('href')).toBe(PR_URL);
     expect(link?.getAttribute('rel')).toContain('noopener');
   });
 

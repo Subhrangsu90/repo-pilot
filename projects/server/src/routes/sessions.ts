@@ -62,7 +62,8 @@ export function registerSessionRoutes(
     const target = refreshableSurfaces(session.runs, thread.messages).get(params.data.surfaceId);
     if (!target) return reply.code(404).send({ error: 'This result cannot be refreshed.' });
     try {
-      const node = await refreshSurface(target.call, opts.executors, ctx);
+      // Re-run on the session's own repository.
+      const node = await refreshSurface(target.call, opts.executors, { ...ctx, repo: session.repo || undefined });
       return { surfaceId: params.data.surfaceId, node, refreshedAt: new Date().toISOString() };
     } catch (err) {
       req.log.warn({ err: (err as Error).message }, 'refresh failed');

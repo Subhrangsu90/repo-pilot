@@ -1,6 +1,7 @@
 import { httpResource } from '@angular/common/http';
 import { valueOf } from '../../core/resource';
-import { Component, computed } from '@angular/core';
+import { Component, computed, inject } from '@angular/core';
+import { RepoChoice } from '../../core/repo';
 import { RouterLink } from '@angular/router';
 import type { PropsOf } from '@repopilot/shared';
 import { GenUiHost } from '../../genui/genui-host';
@@ -55,6 +56,10 @@ interface PullsResponse {
   `,
 })
 export class PullList {
-  protected readonly pulls = httpResource<PullsResponse>(() => '/api/pulls');
+  private readonly repo = inject(RepoChoice).selected;
+  protected readonly pulls = httpResource<PullsResponse>(() => {
+    const repo = this.repo();
+    return repo ? { url: '/api/pulls', params: { repo } } : undefined;
+  });
   protected readonly items = computed(() => valueOf(this.pulls)?.items ?? []);
 }

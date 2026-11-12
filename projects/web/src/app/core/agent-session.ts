@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs';
 import type { SavedSession } from './api';
 import { applyEvent, clearFilter, filterTables, newTurn, replayRuns, tableFilterOf, Turn } from './agent-run';
 import { ClientTools } from './client-tools';
+import { RepoChoice } from './repo';
 import { ModelChoice } from './model-choice';
 
 /** How current a reopened surface is. */
@@ -30,6 +31,7 @@ export class AgentSession {
   private readonly model = inject(ModelChoice);
   private readonly router = inject(Router);
   private readonly clientTools = inject(ClientTools);
+  private readonly repoChoice = inject(RepoChoice);
   private threadId: string | undefined;
   private source: EventSource | undefined;
   /** A prompt to send as soon as the current run finishes. */
@@ -70,6 +72,8 @@ export class AgentSession {
     try {
       const saved = await firstValueFrom(this.http.get<SavedSession>(`/api/sessions/${encodeURIComponent(sessionId)}`));
       this.threadId = saved.id;
+      // A conversation belongs to its repository: show the app on that repo.
+      if (saved.repo) this.repoChoice.select(saved.repo);
       this.turns.set(replayRuns(saved.runs));
       this.reopened.set({ id: saved.id, title: saved.title, capturedAt: saved.updatedAt });
       this.freshness.set(new Map((saved.refreshable ?? []).map((r) => [r.surfaceId, { at: r.capturedAt, refreshed: false, busy: false }])));
@@ -94,6 +98,7 @@ export class AgentSession {
         ...(this.threadId ? { threadId: this.threadId } : {}),
         ...(model ? { model } : {}),
         ...(opts.reviewPullRequest ? { reviewPullRequest: opts.reviewPullRequest } : {}),
+        ...(this.repoChoice.selected() ? { repo: this.repoChoice.selected()! } : {}),
       };
       const { runId, threadId } = await firstValueFrom(this.http.post<StartRunResponse>('/api/runs', body));
       this.threadId = threadId;

@@ -6,6 +6,7 @@ import { AgentSession } from '../../core/agent-session';
 import { formatWhen } from '../../core/api';
 import { ServerStatus } from '../../core/server-status';
 import { ClientTools } from '../../core/client-tools';
+import { onRepoSwitch } from '../../core/repo';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
 import { Icon } from '../../shared/ui/icon';
@@ -268,6 +269,10 @@ export class Chat implements OnInit {
   protected readonly locked = computed(() => this.session.isBusy());
 
   constructor() {
+    // A conversation stays on its repository: switching repos starts a new chat.
+    onRepoSwitch(() => {
+      if (!this.session.isBusy() && this.session.turns().length) this.newChat();
+    });
     // A finished run changes the open counts and the API quota in the chrome.
     let wasBusy = false;
     effect(() => {

@@ -33,7 +33,7 @@ const noop: EmitFn = () => {};
 export class GenUiHost {
   private readonly registry = inject(GENUI_REGISTRY);
 
-  /** Untrusted: whatever the agent (or the playground editor) produced. */
+  /** Untrusted: whatever the agent produced. */
   readonly node = input.required<unknown>();
   readonly emit = input<EmitFn>(noop);
 

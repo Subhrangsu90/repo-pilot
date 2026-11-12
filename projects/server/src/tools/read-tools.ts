@@ -17,9 +17,14 @@ import { fetchReleaseChanges } from '../github/releases';
 import { findInjection, markTitles, titleWarning } from './injection';
 
 export interface ToolContext {
+  /** Acts as the signed-in user (or the GITHUB_TOKEN owner in dev mode). */
   github: GitHub;
-  /** owner/repo the agent may touch; the first one is the default. */
-  allowlist: string[];
+  /**
+   * The repository the user picked in the app ("owner/name"). The agent works on
+   * this one only: GitHub decides what the user may see, the app decides where the
+   * agent may act, so content in one repo can never steer a change in another.
+   */
+  repo?: string;
 }
 
 export interface ToolOutput {
@@ -31,7 +36,7 @@ export interface ToolOutput {
   detail?: string;
 }
 
-/** A failure the model should see and may recover from (bad input, repo not allowed). */
+/** A failure the model should see and may recover from (bad input, another repo). */
 export class ToolError extends Error {}
 
 export type Executor<S extends { input: z.ZodType }> = (input: z.output<S['input']>, ctx: ToolContext) => Promise<ToolOutput>;
@@ -39,13 +44,18 @@ export type Executor<S extends { input: z.ZodType }> = (input: z.output<S['input
 const DAY = 86_400_000;
 export const ageDays = (iso: string, now = Date.now()) => Math.max(0, Math.floor((now - Date.parse(iso)) / DAY));
 
+/** "owner/name" as GitHub allows it. */
+export const REPO_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+
+/** The selected repository; a different one named by the model is refused. */
 export function resolveRepo(repo: string | undefined, ctx: ToolContext): { owner: string; name: string; full: string } {
-  const full = repo ?? ctx.allowlist[0];
-  if (!full) throw new ToolError('No repository configured (GITHUB_REPO_ALLOWLIST is empty).');
-  const allowed = ctx.allowlist.find((r) => r.toLowerCase() === full.toLowerCase());
-  if (!allowed) throw new ToolError(`Repository "${full}" is not allowed. Allowed: ${ctx.allowlist.join(', ')}.`);
-  const [owner, name] = allowed.split('/');
-  return { owner, name, full: allowed };
+  const selected = ctx.repo;
+  if (!selected) throw new ToolError('No repository is selected. Ask the user to pick one in the app.');
+  if (repo && repo.toLowerCase() !== selected.toLowerCase()) {
+    throw new ToolError(`This conversation works on ${selected} only. To work on ${repo}, the user must switch repositories in the app.`);
+  }
+  const [owner, name] = selected.split('/');
+  return { owner, name, full: selected };
 }
 
 // ---------------------------------------------------------------------------

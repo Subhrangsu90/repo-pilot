@@ -15,8 +15,8 @@ Full design: [docs/project-documentation.md](docs/project-documentation.md).
 `@repopilot/shared` exports TypeScript source (no build step). The web app resolves it
 through a `paths` entry in `projects/web/tsconfig.json`; the server runs it through tsx.
 
-Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`, `npm run e2e`
-(Playwright against an `E2E_MODE` server: mock model, fake GitHub, no database).
+Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`. Note: `typecheck`
+does not check Angular templates; `ng build` does.
 
 ## Database (Postgres in Docker + Drizzle)
 
@@ -32,18 +32,15 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`,
   `TEST_DATABASE_URL=postgres://repopilot:repopilot@127.0.0.1:5433/repopilot_test npx vitest run
   src/store.integration.spec.ts` in `projects/server`.
 
-## Demo repository (`Subhrangsu90/repopilot-demo`)
+## Setup check
 
-- `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude and
-  the GitHub token/permissions. Prints status only, never secrets.
-- `npm run seed:demo -w @repopilot/server [-- --yes]` – seeds the demo repo from
-  `projects/server/src/seed-demo-content.ts`. Dry run without `--yes`. Idempotent: once the
-  `v1.0.0` release exists it only creates missing files and never replays history over later
-  commits. Content is planted for the demo: #8 is a prompt-injection issue (must be treated as
-  data), PR #15 has 3 deliberate review bugs (unnormalised rate-limit key, `>` off-by-one,
-  password logged), PR #14 is merged (undo demo), #16 draft, #17 open.
-- Known limitation: the Contents API ignores commit dates, so all commits are dated 2026-11-09;
-  backdating would need a Git Data API rewrite + force-push of `main` (user declined for now).
+- `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude, the
+  GitHub token (repositories it can see) and whether GitHub sign-in is fully configured. Prints
+  status only, never secrets.
+- No seed data, demo repository, fixtures, playground or e2e suite any more (removed 2026-11-12 at
+  the user's request). The repo `Subhrangsu90/repopilot-demo` still exists on GitHub with the data
+  seeded earlier (#8 injection issue, PR #15 with 3 planted bugs, PR #16 with an injected
+  description), but nothing in the code assumes it.
 
 ## Decisions (agreed 2026-11-10)
 
@@ -54,6 +51,9 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`,
   Keep providers behind one interface so the switch is a config change.
 - GitHub: OAuth App sign-in when `GITHUB_OAUTH_CLIENT_ID` + `_SECRET` + `SESSION_SECRET` are set
   (week 4); otherwise dev mode, everyone acting as the fine-grained PAT's owner (`GITHUB_TOKEN`).
+- Repositories (2026-11-12, user's decision): no allowlist. Scope `repo` (public + private; an
+  OAuth App cannot narrow it per repo). The side nav lists every repo the user can access and the
+  app works on the selected one only (see "Multi-repo" under week 4).
 - Routes render client-side (`RenderMode.Client`); the SSR server only serves the shell.
 - Theme: **Graphite by default**, Light as a toggle saved in localStorage (`repopilot-theme`),
   applied as `<html data-theme>`; index.html sets it before first paint.
@@ -64,7 +64,7 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`,
   History, Audit log) with live PR/issue counts (all six built as of 2026-11-12); unbuilt ones are dimmed, not links ("Coming soon"),
   and get a `path` in `NAV` (`layout/shell.ts`) as each page is built. Model switch on Ask only;
   each page draws its own top bar (Ask: repo, API quota, avatar); theme toggle sits in the nav foot.
-  `/playground` is a dev-only renderer test page, out of the nav and landing (URL only).
+  `/signin` is outside the Shell (see week 4).
 - Screen Spec (2026-11-11, user's Claude Docs doc): <https://claude.ai/artifact/7PvQ8ojSvhP7zT8EaCvKwp>
   — the 7 screens, shared layout, play-mode behaviour and open gaps; read it with the Claude Docs
   tools. Where it and the design system disagree, the design system wins (user's decision); the
@@ -242,7 +242,9 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`,
         Verified live with Gemma: health report → "Only show bugs" filtered in place (needed examples
         in the tool description); "Review pull request #15" pending → "Take me to where the rate
         limit key is built" → `highlight_lines` src/auth/login.js:6–34; rejected, nothing posted.
-  - [x] Mock agent + fake GitHub + Playwright + recorded streams (2026-11-12): `E2E_MODE=1` forces
+  - [x] (Removed 2026-11-12 at the user's request, with the playground, `shared/src/fixtures.ts`
+        and the seed script; tests that used fixtures now use inline data.) Was: mock agent + fake
+        GitHub + Playwright + recorded streams: `E2E_MODE=1` forced
         `LLM_PROVIDER=mock` (`llm/mock.ts`, scripts per demo prompt), an in-process `FakeGitHub`
         (`testing/fake-github.ts`, demo data for `demo-owner/repopilot-demo`, records writes,
         anything unmocked → 404) and no database, whatever `.env` says; adds
@@ -277,6 +279,22 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`,
         state, which stopped the view and left the sign-in link without an href). Verified: dev mode unchanged on the live server;
         OAuth mode with placeholder settings → every API 401, login redirect correct. Not done: token
         revocation on sign-out, a GitHub App (fine-grained) instead of an OAuth App.
+  - [x] Multi-repo (2026-11-12): config has no `GITHUB_REPO_ALLOWLIST`; `GITHUB_OAUTH_SCOPE`
+        defaults to `repo`; empty OAuth env values count as unset. `GET /api/repos` (the user's
+        repos, owner/collaborator/org, sorted by push, archived hidden, max 100). `ToolContext.repo`
+        = the selected repo; `resolveRepo()` refuses any other repo the model names ("This
+        conversation works on X only"). Pages pass `?repo=owner/name` (validated by
+        `REPO_PATTERN`; GitHub 403/404 → "not found or no access"). `POST /api/runs {repo}`: a
+        thread keeps the repo of its first prompt (`Thread.repo`, stored in `sessions.repo`), a
+        different repo → 409 "start a new chat"; approvals and Refresh use the thread's/session's
+        repo. Audit: `recordAudit` gets `repo`; inverses are pinned to it (`pinRepo`) so Undo acts
+        there; older entries fall back to the session's repo. Web: `core/repo.ts` `RepoChoice`
+        (list, `selected`, pick saved in localStorage `repopilot-repo`, falls back to the most
+        recently pushed repo), picker in the Shell (repo name; owner shown only when not yours;
+        "private"), `onRepoSwitch()`: Ask starts a new chat, Issues / Releases reset, PR review
+        goes back to `/pulls`; reopening a session from History selects its repo. Verified in a
+        browser on a dev-mode server (84 repos listed, switching updates counts and pages, pick
+        survives reload).
   - [ ] Deploy (hosted Postgres): host not chosen yet.
 
 ## Agent server notes

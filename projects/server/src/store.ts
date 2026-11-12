@@ -39,8 +39,6 @@ export function lastText(events: AgentEvent[]): string {
 export class Store {
   constructor(
     private readonly db: Db,
-    /** The default repository, recorded on each session. Users come with each call (auth/index.ts). */
-    private readonly who: { repo: string },
     private readonly log: (msg: string, err: unknown) => void,
   ) {}
 
@@ -63,7 +61,7 @@ export class Store {
           .values({
             id: thread.id,
             userId,
-            repo: this.who.repo,
+            repo: thread.repo ?? '',
             // Named after what the agent did in this first run; only set on insert, so a rename sticks.
             title: sessionTitle(run.prompt, thread.messages),
             status: thread.pending ? 'awaiting-approval' : 'done',
@@ -89,7 +87,7 @@ export class Store {
   }
 
   /** A conversation to put back in memory, e.g. after a server restart. */
-  async loadThread(id: string): Promise<Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner'> | null> {
+  async loadThread(id: string): Promise<Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner' | 'repo'> | null> {
     const row = await this.db.query.sessions.findFirst({ where: eq(sessions.id, id) });
     if (!row) return null;
     return {
@@ -98,6 +96,7 @@ export class Store {
       model: (row.model as Thread['model']) ?? undefined,
       pending: (row.pending as PendingApproval | null) ?? undefined,
       owner: row.userId,
+      repo: row.repo || undefined,
     };
   }
 
@@ -187,12 +186,12 @@ export class Store {
   // Audit log
   // -------------------------------------------------------------------------
 
-  async recordAudit(sessionId: string, change: ExecutedChange & { approver: string }): Promise<string | null> {
+  async recordAudit(sessionId: string, change: ExecutedChange & { approver: string; repo: string }): Promise<string | null> {
     try {
       // The session row may not exist yet (it is saved when the run ends); create a stub so the link holds.
       await this.db
         .insert(sessions)
-        .values({ id: sessionId, userId: change.approver, repo: this.who.repo, title: titleFrom(change.prompt ?? change.summary) })
+        .values({ id: sessionId, userId: change.approver, repo: change.repo, title: titleFrom(change.prompt ?? change.summary) })
         .onConflictDoNothing();
       const [row] = await this.db
         .insert(auditEntries)

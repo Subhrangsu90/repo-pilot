@@ -42,7 +42,7 @@ function fakeCtx(opts: { author?: string; body?: string; title?: string } = {}) 
     },
     login: async () => 'me',
   };
-  return { ctx: { github, allowlist: ['octo/demo'] } as unknown as ToolContext, posted };
+  return { ctx: { github, repo: 'octo/demo' } as unknown as ToolContext, posted };
 }
 
 const draft = {

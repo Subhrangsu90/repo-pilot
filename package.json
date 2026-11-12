@@ -14,11 +14,9 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "format": "prettier --write \"projects/**/*.{ts,html,css,json}\"",
-    "e2e": "playwright test"
+    "format": "prettier --write \"projects/**/*.{ts,html,css,json}\""
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
     "prettier": "^3.8.1",
     "typescript": "~6.0.2"
   }

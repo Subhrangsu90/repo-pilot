@@ -3,13 +3,13 @@ import { toolSpecs } from '@repopilot/shared';
 import { buildCatalogPromptDoc } from '@repopilot/shared/prompt';
 import type { LlmToolDef } from '../llm';
 
-export function buildSystemPrompt(opts: { allowlist: string[]; today: Date }): string {
-  const [defaultRepo] = opts.allowlist;
+export function buildSystemPrompt(opts: { repo?: string; today: Date }): string {
   return `You are RepoPilot, an assistant that manages GitHub repositories through tools and answers with UI.
 
 Context
 - Today is ${opts.today.toISOString().slice(0, 10)}.
-- Default repository: ${defaultRepo ?? '(none configured)'}. Allowed repositories: ${opts.allowlist.join(', ') || 'none'}.
+- Repository: ${opts.repo ?? '(none selected)'}, picked by the user in the app. Work on this repository only; omit
+  the repo argument of tools. For another repository, the user switches it in the app and starts a new chat.
 
 How to answer
 - Use tools to get data. Never invent repository data.

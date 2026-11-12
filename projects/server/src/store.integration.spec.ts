@@ -32,12 +32,12 @@ maybe('Store (Postgres)', () => {
     await opened.db.delete(auditEntries);
     await opened.db.delete(runs);
     await opened.db.delete(sessions);
-    store = new Store(opened.db, { repo: 'octo/demo' }, (m) => errors.push(m));
+    store = new Store(opened.db, (m) => errors.push(m));
   });
   afterAll(() => close?.());
 
   const ME = 'octocat';
-  const thread = (over: Partial<Thread> = {}): Thread => ({ id: randomUUID(), messages: [{ role: 'user', text: 'hi' }], busy: false, touched: 0, owner: ME, ...over });
+  const thread = (over: Partial<Thread> = {}): Thread => ({ id: randomUUID(), messages: [{ role: 'user', text: 'hi' }], busy: false, touched: 0, owner: ME, repo: 'octo/demo', ...over });
 
   it('saves a session with its runs and lists it with prompt, last answer and components', async () => {
     const t = thread();
@@ -62,7 +62,7 @@ maybe('Store (Postgres)', () => {
     await store.saveRun({ id: runId, prompt: 'close wontfix', events: [ui('ApprovalCard')] }, t);
 
     expect(await store.findSessionPendingOnRun(runId)).toBe(t.id);
-    expect(await store.loadThread(t.id)).toMatchObject({ id: t.id, model: 'cloud', owner: ME, pending: { runId, callId: 'c1' } });
+    expect(await store.loadThread(t.id)).toMatchObject({ id: t.id, model: 'cloud', owner: ME, repo: 'octo/demo', pending: { runId, callId: 'c1' } });
     expect((await store.listSessions({ userId: ME, filter: 'waiting' })).map((s) => s.id)).toEqual([t.id]);
   });
 
@@ -83,7 +83,7 @@ maybe('Store (Postgres)', () => {
       inverse: { kind: 'issues', label: 'Reopen #9, #10', input: { issueNumbers: [9, 10], action: 'reopen', reason: 'not_planned' } },
     };
     // Recorded before the run is saved: the session row is created as a stub.
-    const id = await store.recordAudit(t.id, { ...change, approver: ME });
+    const id = await store.recordAudit(t.id, { ...change, approver: ME, repo: 'octo/demo' });
     expect(id).toMatch(/^aud_\d{4}$/);
 
     const [entry] = await store.listAudit('destructive', ME);
@@ -114,7 +114,7 @@ maybe('Store (Postgres)', () => {
   it('keeps each user to their own sessions and audit entries', async () => {
     const t = thread({ owner: 'someone-else' });
     await store.saveRun({ id: randomUUID(), prompt: 'their question', events: [] }, t);
-    const id = await store.recordAudit(t.id, { runId: randomUUID(), tool: 'bulk_update_issues', risk: 'destructive', summary: 'Close 1 issue', input: {}, approvedIds: [9], keptByUser: [], ok: true, result: 'Closed 1 issue.', inverse: null, approver: 'someone-else' });
+    const id = await store.recordAudit(t.id, { runId: randomUUID(), tool: 'bulk_update_issues', risk: 'destructive', summary: 'Close 1 issue', input: {}, approvedIds: [9], keptByUser: [], ok: true, result: 'Closed 1 issue.', inverse: null, approver: 'someone-else', repo: 'octo/demo' });
     const seq = Number(id!.slice(4));
 
     expect((await store.listSessions({ userId: ME, filter: 'all' })).map((s) => s.id)).not.toContain(t.id);

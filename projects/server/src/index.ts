@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { componentNames, type AgentEvent, type ModelOption } from '@repopilot/shared';
 import { config, type Config } from './config';
@@ -26,24 +26,13 @@ import { Store } from './store';
 import { GitHub } from './github/client';
 import { createProvider } from './llm';
 import { fetchPullRequest } from './github/pulls';
-import { FakeGitHub } from './testing/fake-github';
 import { actions } from './tools/actions';
-import { executors, resolveRepo, runListIssues, runListPullRequests, type ToolContext } from './tools/read-tools';
+import { executors, REPO_PATTERN, resolveRepo, runListIssues, runListPullRequests, ToolError, type ToolContext } from './tools/read-tools';
+import { pinRepo } from './tools/undo';
+import { GitHubError } from './github/client';
 
 const app = Fastify({ logger: { level: 'info' } });
-// E2E_MODE: the in-process fake (testing/fake-github.ts); it has the same rest / graphql / login surface.
-const fake = config.E2E_MODE ? new FakeGitHub() : null;
-const github = fake ? (fake as unknown as GitHub) : new GitHub(config.GITHUB_TOKEN ?? '');
-if (fake) {
-  app.log.warn('E2E_MODE: fake GitHub, mock model, no database. For end-to-end tests only.');
-  /** What the fake GitHub was asked to write, for Playwright to assert on. */
-  app.get('/api/__test__/github-writes', async () => ({ writes: fake.writes }));
-  /** Back to the seeded demo data between tests. */
-  app.post('/api/__test__/reset', async () => {
-    fake.reset();
-    return { ok: true };
-  });
-}
+const github = new GitHub(config.GITHUB_TOKEN ?? '');
 const toolDefs = buildToolDefs();
 
 /** Sign in with GitHub (OAuth mode), or everyone acts as GITHUB_TOKEN's owner (dev mode). */
@@ -61,7 +50,25 @@ app.log.info(`auth: ${auth.mode === 'oauth' ? 'Sign in with GitHub' : 'dev mode,
 /** The user of a request and a tool context that acts with their GitHub access. */
 function who(req: FastifyRequest): { login: string; ctx: ToolContext } {
   const user = auth.userOf(req);
-  return { login: user.login, ctx: { github: user.github, allowlist: config.GITHUB_REPO_ALLOWLIST } };
+  return { login: user.login, ctx: { github: user.github } };
+}
+
+/** `?repo=owner/name` (the repository picked in the app), or null when missing or malformed. */
+function repoParam(req: FastifyRequest): string | null {
+  const repo = (req.query as { repo?: unknown } | undefined)?.repo;
+  return typeof repo === 'string' && REPO_PATTERN.test(repo) ? repo : null;
+}
+
+const NO_REPO = 'Pick a repository first (?repo=owner/name).';
+
+/** GitHub refused or failed: "no access" for 403/404, otherwise "did not answer". */
+function githubFailure(req: FastifyRequest, reply: FastifyReply, err: unknown, what: string) {
+  req.log.warn({ err: (err as Error).message }, `${what} failed`);
+  if (err instanceof GitHubError && (err.status === 404 || err.status === 403)) {
+    return reply.code(404).send({ error: 'Repository not found, or your GitHub account has no access to it.' });
+  }
+  if (err instanceof ToolError) return reply.code(400).send({ error: err.message });
+  return reply.code(502).send({ error: 'GitHub did not answer.' });
 }
 
 /** GitHub can be called: a signed-in user's token (OAuth) or GITHUB_TOKEN (dev). */
@@ -77,7 +84,7 @@ async function connectStore(): Promise<Store | null> {
   try {
     const { db } = await openDb(config.DATABASE_URL);
     app.log.info('Postgres connected; migrations applied.');
-    return new Store(db, { repo: config.GITHUB_REPO_ALLOWLIST[0] ?? '' }, (msg, err) =>
+    return new Store(db, (msg, err) =>
       app.log.error({ err: (err as Error).message }, msg),
     );
   } catch (err) {
@@ -111,7 +118,7 @@ app.get('/api/health', async () => ({
       ollama: true,
     },
   },
-  github: { tokenConfigured: Boolean(config.GITHUB_TOKEN), repos: config.GITHUB_REPO_ALLOWLIST },
+  github: { tokenConfigured: Boolean(config.GITHUB_TOKEN) },
   auth: auth.mode,
   catalog: componentNames,
 }));
@@ -139,8 +146,9 @@ interface OverviewData {
  * and who the token belongs to. No secrets.
  */
 app.get('/api/overview', async (req, reply) => {
-  const full = config.GITHUB_REPO_ALLOWLIST[0];
-  if (!githubReady || !full) return reply.code(503).send({ error: 'GitHub access or GITHUB_REPO_ALLOWLIST is not set.' });
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const full = repoParam(req);
+  if (!full) return reply.code(400).send({ error: NO_REPO });
   const [owner, name] = full.split('/');
   try {
     const d = await who(req).ctx.github.graphql<OverviewData>(OVERVIEW_QUERY, { owner, name });
@@ -153,24 +161,53 @@ app.get('/api/overview', async (req, reply) => {
       viewer: d.viewer,
     };
   } catch (err) {
-    req.log.warn({ err: (err as Error).message }, 'overview failed');
-    return reply.code(502).send({ error: 'GitHub did not answer.' });
+    return githubFailure(req, reply, err, 'overview');
   }
 });
 
-/** The Pull requests page: open PRs of the default repo, as PrCard props. */
-app.get('/api/pulls', async (req, reply) => {
+interface RepoJson {
+  full_name: string;
+  private: boolean;
+  description: string | null;
+  pushed_at: string | null;
+  archived: boolean;
+  permissions?: { push?: boolean };
+}
+
+/**
+ * The repository picker: every repository the signed-in user can access (owned,
+ * collaborator, organization), most recently pushed first. Private ones need the
+ * `repo` OAuth scope (GITHUB_OAUTH_SCOPE).
+ */
+app.get('/api/repos', async (req, reply) => {
   if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
   try {
-    const out = await runListPullRequests({ state: 'open', limit: 50 }, who(req).ctx);
-    return { repo: config.GITHUB_REPO_ALLOWLIST[0], items: (out.ui?.props as { items: unknown[] }).items };
+    const params = 'per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member';
+    const repos = await who(req).ctx.github.rest<RepoJson[]>(`/user/repos?${params}`);
+    return {
+      items: repos
+        .filter((r) => !r.archived)
+        .map((r) => ({ full: r.full_name, private: r.private, description: r.description?.slice(0, 200) ?? null, pushedAt: r.pushed_at, canWrite: r.permissions?.push ?? false })),
+    };
   } catch (err) {
-    req.log.warn({ err: (err as Error).message }, 'pull list failed');
-    return reply.code(502).send({ error: 'GitHub did not answer.' });
+    return githubFailure(req, reply, err, 'repo list');
   }
 });
 
-const IssuesQuery = z.object({ state: z.enum(['open', 'closed', 'all']).default('open') });
+/** The Pull requests page: open PRs of the selected repo, as PrCard props. */
+app.get('/api/pulls', async (req, reply) => {
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const repo = repoParam(req);
+  if (!repo) return reply.code(400).send({ error: NO_REPO });
+  try {
+    const out = await runListPullRequests({ state: 'open', limit: 50 }, { ...who(req).ctx, repo });
+    return { repo, items: (out.ui?.props as { items: unknown[] }).items };
+  } catch (err) {
+    return githubFailure(req, reply, err, 'pull list');
+  }
+});
+
+const IssuesQuery = z.object({ state: z.enum(['open', 'closed', 'all']).default('open'), repo: z.string().optional() });
 const ISSUE_LIMIT = 100;
 
 /**
@@ -182,13 +219,14 @@ app.get('/api/issues', async (req, reply) => {
   const query = IssuesQuery.safeParse(req.query);
   if (!query.success) return reply.code(400).send({ error: 'state must be open, closed or all.' });
   if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const repo = repoParam(req);
+  if (!repo) return reply.code(400).send({ error: NO_REPO });
   try {
-    const out = await runListIssues({ state: query.data.state, labels: [], limit: ISSUE_LIMIT }, who(req).ctx);
+    const out = await runListIssues({ state: query.data.state, labels: [], limit: ISSUE_LIMIT }, { ...who(req).ctx, repo });
     const rows = (out.ui?.props as { rows: unknown[] }).rows;
-    return { repo: config.GITHUB_REPO_ALLOWLIST[0], rows, truncated: rows.length === ISSUE_LIMIT };
+    return { repo, rows, truncated: rows.length === ISSUE_LIMIT };
   } catch (err) {
-    req.log.warn({ err: (err as Error).message }, 'issue list failed');
-    return reply.code(502).send({ error: 'GitHub did not answer.' });
+    return githubFailure(req, reply, err, 'issue list');
   }
 });
 
@@ -197,14 +235,15 @@ app.get<{ Params: { number: string } }>('/api/pulls/:number', async (req, reply)
   const number = Number(req.params.number);
   if (!Number.isInteger(number) || number < 1) return reply.code(400).send({ error: 'Not a pull request number.' });
   if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const repo = repoParam(req);
+  if (!repo) return reply.code(400).send({ error: NO_REPO });
   try {
-    const { ctx } = who(req);
+    const ctx = { ...who(req).ctx, repo };
     const pr = await fetchPullRequest(ctx, resolveRepo(undefined, ctx), number, { files: false });
     if (!pr) return reply.code(404).send({ error: `Pull request #${number} was not found.` });
     return pr.info;
   } catch (err) {
-    req.log.warn({ err: (err as Error).message }, 'pull request failed');
-    return reply.code(502).send({ error: 'GitHub did not answer.' });
+    return githubFailure(req, reply, err, 'pull request');
   }
 });
 
@@ -213,11 +252,12 @@ const StartRunBody = z.object({
   threadId: z.uuid().optional(),
   model: z.enum(['cloud', 'local']).optional(),
   reviewPullRequest: z.number().int().positive().optional(),
+  /** The repository picked in the app; a conversation stays on the repo it started with. */
+  repo: z.string().regex(REPO_PATTERN, 'Use owner/name').optional(),
 });
 
 /** The UI's Cloud / Local switch. Cloud keeps a configured cloud provider, else Gemini. */
 function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
-  if (config.LLM_PROVIDER === 'mock') return 'mock'; // E2E: the Cloud / Local switch never reaches a real model
   if (model === 'local') return 'ollama';
   if (model === 'cloud') return config.LLM_PROVIDER === 'ollama' ? 'gemini' : config.LLM_PROVIDER;
   return config.LLM_PROVIDER;
@@ -236,7 +276,7 @@ function agentDeps(
   );
   return {
     provider,
-    system: buildSystemPrompt({ allowlist: config.GITHUB_REPO_ALLOWLIST, today: new Date() }),
+    system: buildSystemPrompt({ repo: user.ctx.repo, today: new Date() }),
     tools: toolDefs,
     executors,
     actions,
@@ -246,7 +286,16 @@ function agentDeps(
     signal: run.signal,
     reviewPullRequest,
     // The audit log records who approved each change.
-    onExecuted: store ? async (change) => void (await store.recordAudit(threadId, { ...change, approver: user.login })) : undefined,
+    onExecuted: store
+      ? async (change) =>
+          void (await store.recordAudit(threadId, {
+            ...change,
+            approver: user.login,
+            repo: user.ctx.repo ?? '',
+            // Undo must act on the repo the change was made in, whatever is selected later.
+            inverse: change.inverse && user.ctx.repo ? pinRepo(change.inverse, user.ctx.repo) : change.inverse,
+          }))
+      : undefined,
   };
 }
 
@@ -256,11 +305,18 @@ app.post('/api/runs', async (req, reply) => {
     return reply.code(400).send({ error: "Send { prompt: string, threadId?: uuid, model?: 'cloud' | 'local' }." });
   }
   if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
-  const user = who(req);
+  const me = who(req);
   await ensureThread(parsed.data.threadId);
   const existing = getThread(parsed.data.threadId);
   // Only the person who started a conversation may continue it.
-  if (existing?.owner && existing.owner !== user.login) return reply.code(404).send({ error: 'Conversation not found.' });
+  if (existing?.owner && existing.owner !== me.login) return reply.code(404).send({ error: 'Conversation not found.' });
+  // A conversation stays on its repository; another repo means a new chat.
+  const repo = existing?.repo ?? parsed.data.repo;
+  if (!repo) return reply.code(400).send({ error: 'Pick a repository first.' });
+  if (existing?.repo && parsed.data.repo && existing.repo.toLowerCase() !== parsed.data.repo.toLowerCase()) {
+    return reply.code(409).send({ error: `This conversation is about ${existing.repo}. Start a new chat to work on ${parsed.data.repo}.` });
+  }
+  const user = { login: me.login, ctx: { ...me.ctx, repo } };
   const waiting = existing?.pending;
   if (waiting) {
     // A side question: read and client tools only, on a copy of the conversation (agent/side.ts).
@@ -268,7 +324,7 @@ app.post('/api/runs', async (req, reply) => {
       const started = startRun(parsed.data.threadId, async (thread, emit, run) => {
         const deps = agentDeps(user, thread.id, thread.model, emit, run);
         await runAgent(sideHistory(thread.messages, waiting), parsed.data.prompt, { ...deps, tools: readOnlyTools(deps.tools), actions: {}, readOnly: true });
-      }, { prompt: parsed.data.prompt, owner: user.login });
+      }, { prompt: parsed.data.prompt, owner: user.login, repo });
       return reply.code(202).send(started);
     } catch (err) {
       if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
@@ -291,7 +347,7 @@ app.post('/api/runs', async (req, reply) => {
         req.log.warn({ err: (err as Error).message }, 'run failed');
         throw err;
       }
-    }, { prompt: parsed.data.prompt, owner: user.login });
+    }, { prompt: parsed.data.prompt, owner: user.login, repo });
     return reply.code(202).send(started);
   } catch (err) {
     if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
@@ -325,7 +381,9 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
     await ensureThread((await store.findSessionPendingOnRun(req.params.id).catch(() => null)) ?? undefined);
     thread = findPendingByRun(req.params.id);
   }
-  const user = who(req);
+  const me = who(req);
+  // The change runs on the conversation's repository, whatever is selected in the app now.
+  const user = { login: me.login, ctx: { ...me.ctx, repo: thread?.repo } };
   const pending = thread?.pending;
   if (!thread || !pending || pending.callId !== toolCallId || (thread.owner && thread.owner !== user.login)) {
     return reply.code(404).send({ error: 'No approval is waiting for this run. It may have been answered already.' });

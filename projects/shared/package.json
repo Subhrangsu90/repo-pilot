@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Contract shared by the Angular app and the agent server: component catalog, UI node validation, fixtures.",
+  "description": "Contract shared by the Angular app and the agent server: component catalog, UI node validation, tool specs.",
   "exports": {
     ".": "./src/index.ts",
     "./prompt": "./src/prompt.ts"
