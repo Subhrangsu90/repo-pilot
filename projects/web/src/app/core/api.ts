@@ -24,6 +24,8 @@ export interface SavedSession {
   createdAt: string;
   updatedAt: string;
   runs: { id: string; prompt: string | null; status: string; events: AgentEvent[]; createdAt: string }[];
+  /** Surfaces made by read tools, which Refresh can re-run; with when each was captured. */
+  refreshable?: { surfaceId: string; capturedAt: string }[];
 }
 
 /** GET /api/audit items. */

@@ -173,7 +173,7 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - [x] Week 3 merged to `master` (PR #1, 2026-11-11). FormSurface ships as the ReleaseForm pattern,
       not a separate catalog component. Stored sessions keep tool calls/results and provider `raw`
       parts (needed for replay and Gemini thought signatures).
-- [ ] Week 3 wrap-up (branch `chore/week-3-wrap-up`) – live checks before week 4. Verified
+- [x] Week 3 wrap-up (branch `chore/week-3-wrap-up`, done 2026-11-12) – live checks before week 4. Verified
       2026-11-10 against GitHub: approve → audit → Undo (`aud_0001`: closed #9, #10 with #11
       deselected, then reopened), real release publish + Undo (`aud_0002`: v1.0.1 release and tag
       deleted), real review submit (`aud_0003`: Comment on PR #17; reviews have no undo).
@@ -203,7 +203,8 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       IssueTable → "Close N…" / "Reopen N…" sends "Close issues #9 and #10 as not planned" to the
       page's own AgentSession; only the ApprovalCard + steps are shown (the table is already there);
       list and nav counts reload when the run settles. Verified with Gemma via the API: card listed
-      exactly #9, #10; rejected, nothing changed. Not yet clicked through in the browser.
+      exactly #9, #10; rejected, nothing changed. Clicked through by the user (`aud_0004`: closed
+      #2, #3, #4 from the page; not undone).
       Context window (2026-11-12, doc §9b step 5): `agent/context.ts` `contextWindow()` sends the
       model the last 6 turns whole (a turn starts at a user prompt; `[RepoPilot app]` notes are not
       prompts, so tool calls, results and `raw` parts are never split) and appends older turns to
@@ -212,7 +213,17 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       dropped first), not by a model call, so it costs no quota, cannot invent facts and needs no
       `summary` column; the stored thread stays complete. Follow-ups such as "only show bugs"
       never depended on this (the whole thread was sent before). Checked on stored sessions.
-      Then: agent naming sessions (now: first line of the prompt), Refresh on stale surfaces.
+      Refresh (2026-11-12, doc §9b step 6): `GET /api/sessions/:id` adds `refreshable` (surfaceId +
+      capturedAt = the run's start) for surfaces made by read tools, matched by `${runId}-${callId}`
+      to the stored tool call (never render_ui or gate surfaces); `POST
+      /api/sessions/:id/surfaces/:surfaceId/refresh` re-runs that tool with its stored input (no
+      model) and returns a validated node (`agent/refresh.ts`). Ask shows "Captured …" + Refresh on
+      those surfaces of a reopened session and swaps the node in place; not saved, so reopening
+      again shows the captured data. Session titles (`agent/title.ts` `sessionTitle()`): named in
+      code from the first run's tool calls, set on insert only (a rename sticks): "PR #16 review",
+      "Release v1.1.0", "Close issues #9, #10", "Reopen 4 issues", "Health report"; list questions
+      keep the prompt line (it says more than "Open pull requests"). Not a model call, unlike doc
+      §9b step 1.
 - [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff
       lines), recorded event-stream fixtures + mock agent, Playwright e2e, GitHub OAuth, deploy
       (hosted Postgres).

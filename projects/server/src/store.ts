@@ -4,6 +4,7 @@ import type { Db } from './db/client';
 import { auditEntries, runs, sessions } from './db/schema';
 import type { ExecutedChange, PendingApproval } from './agent/loop';
 import type { FinishedRun, Thread } from './agent/runs';
+import { sessionTitle, titleFrom } from './agent/title';
 import type { ChatMessage } from './llm';
 import type { Inverse } from './tools/undo';
 
@@ -14,12 +15,7 @@ export type SessionFilter = 'all' | 'waiting' | 'changes' | 'read';
 export const auditId = (seq: number) => `aud_${String(seq).padStart(4, '0')}`;
 export const auditSeq = (id: string) => (/^aud_(\d{1,12})$/.exec(id) ? Number(id.slice(4)) : null);
 
-/** First line of the prompt, as a session title (the agent does not name sessions yet). */
-export function titleFrom(prompt: string): string {
-  const line = prompt.trim().split('\n')[0].replace(/\s+/g, ' ');
-  const text = line.length > 80 ? `${line.slice(0, 77)}…` : line;
-  return text ? text[0].toUpperCase() + text.slice(1) : 'Untitled session';
-}
+export { titleFrom };
 
 /** The components a run showed, in order, without repeats. */
 export function componentsIn(events: AgentEvent[]): string[] {
@@ -66,7 +62,8 @@ export class Store {
             id: thread.id,
             userId,
             repo: this.who.repo,
-            title: titleFrom(run.prompt ?? 'Untitled session'),
+            // Named after what the agent did in this first run; only set on insert, so a rename sticks.
+            title: sessionTitle(run.prompt, thread.messages),
             status: thread.pending ? 'awaiting-approval' : 'done',
             model: thread.model ?? null,
             messages: thread.messages,

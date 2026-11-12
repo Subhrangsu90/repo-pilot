@@ -59,7 +59,7 @@ async function ensureThread(id: string | undefined) {
   if (data) restoreThread(data);
 }
 
-registerSessionRoutes(app, store, { onDelete: dropThread });
+registerSessionRoutes(app, store, { onDelete: dropThread, executors, ctx: toolCtx });
 registerAuditRoutes(app, store, toolCtx);
 
 /** Liveness plus a quick view of what is configured (never the secrets). */

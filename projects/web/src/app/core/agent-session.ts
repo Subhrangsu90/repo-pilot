@@ -1,10 +1,19 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
-import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent } from '@repopilot/shared';
+import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent, type UiSurface } from '@repopilot/shared';
 import { firstValueFrom } from 'rxjs';
 import type { SavedSession } from './api';
 import { applyEvent, newTurn, replayRuns, Turn } from './agent-run';
 import { ModelChoice } from './model-choice';
+
+/** How current a reopened surface is. */
+export interface Freshness {
+  /** When the data was captured, or refreshed. */
+  at: string;
+  refreshed: boolean;
+  busy: boolean;
+  error?: string;
+}
 
 /**
  * The conversation as signals. Each prompt starts a run on the agent server
@@ -33,6 +42,11 @@ export class AgentSession {
   /** Set when the conversation was reopened from History: its data is as it was then. */
   readonly reopened = signal<{ id: string; title: string; capturedAt: string } | null>(null);
   readonly loadError = signal<string | null>(null);
+  /**
+   * Surfaces of a reopened session that Refresh can re-run (read tools only), by
+   * surface id: when the data was captured or last refreshed, and the refresh state.
+   */
+  readonly freshness = signal<ReadonlyMap<string, Freshness>>(new Map());
 
   /** The saved session this conversation belongs to (its thread id), once the server has one. */
   get sessionId(): string | undefined {
@@ -50,6 +64,7 @@ export class AgentSession {
       this.threadId = saved.id;
       this.turns.set(replayRuns(saved.runs));
       this.reopened.set({ id: saved.id, title: saved.title, capturedAt: saved.updatedAt });
+      this.freshness.set(new Map((saved.refreshable ?? []).map((r) => [r.surfaceId, { at: r.capturedAt, refreshed: false, busy: false }])));
       return true;
     } catch (err) {
       this.loadError.set(errorMessage(err));
@@ -168,9 +183,40 @@ export class AgentSession {
     }
   }
 
+  /**
+   * Refresh on a reopened surface: the server re-runs the read tool behind it
+   * (no model call) and the new data replaces the surface in place. Not saved:
+   * reopening the session again shows what was captured.
+   */
+  async refresh(surfaceId: string): Promise<void> {
+    const sessionId = this.threadId;
+    const current = this.freshness().get(surfaceId);
+    if (!sessionId || !current || current.busy) return;
+    this.setFreshness(surfaceId, { ...current, busy: true, error: undefined });
+    try {
+      const res = await firstValueFrom(
+        this.http.post<{ surfaceId: string; node: UiSurface['node']; refreshedAt: string }>(
+          `/api/sessions/${encodeURIComponent(sessionId)}/surfaces/${encodeURIComponent(surfaceId)}/refresh`,
+          {},
+        ),
+      );
+      this.turns.update((list) =>
+        list.map((t) => ({ ...t, surfaces: t.surfaces.map((s) => (s.surfaceId === surfaceId ? { ...s, node: res.node } : s)) })),
+      );
+      this.setFreshness(surfaceId, { at: res.refreshedAt, refreshed: true, busy: false });
+    } catch (err) {
+      this.setFreshness(surfaceId, { ...current, busy: false, error: errorMessage(err) });
+    }
+  }
+
+  private setFreshness(surfaceId: string, value: Freshness) {
+    this.freshness.update((m) => new Map(m).set(surfaceId, value));
+  }
+
   /** Start a fresh conversation. */
   reset(): void {
     this.queued = undefined;
+    this.freshness.set(new Map());
     this.reopened.set(null);
     this.loadError.set(null);
     this.source?.close();
