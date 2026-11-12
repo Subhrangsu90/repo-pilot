@@ -295,6 +295,24 @@ does not check Angular templates; `ng build` does.
         goes back to `/pulls`; reopening a session from History selects its repo. Verified in a
         browser on a dev-mode server (84 repos listed, switching updates counts and pages, pick
         survives reload).
+  - [x] Fixes from use (2026-11-12): (1) an empty model reply with nothing on screen (Gemma on
+        "give details about this repo") now gets one `[RepoPilot app]` reminder (`EMPTY_REMINDER` in
+        `loop.ts`), then a visible "could not produce an answer" note; never when a tool already
+        showed UI. (2) `get_repo_health` gives the model `commitsPerWeek` (the chart's numbers) and
+        all `contributors`, so "commits per week" follow-ups can be answered. (3) Commit history is
+        paged (`HISTORY_PAGE_QUERY`, 100 per page, up to 5 pages = 500); beyond that the data and
+        the Section description say the counts are partial. Verified with Gemma on
+        Subhrangsu90/inkframe-app: 109 commits all counted, weekly breakdown answered.
+  - [x] Profile & settings (2026-11-12, no artboard): `/settings` (`features/settings/settings.ts`),
+        opened from the avatar + login in the nav foot. Sections: Profile (GitHub name, login, bio,
+        company, location, member since, repo counts, View on GitHub), GitHub access (mode, scopes
+        GitHub actually granted from `x-oauth-scopes` via `GitHub.me()`, "sign in again" when they
+        are less than `GITHUB_OAUTH_SCOPE`, Manage access/tokens on GitHub, Sign out in OAuth mode),
+        Preferences (theme, model, repository; saved in the browser), Your activity
+        (`Store.countsFor(userId)`: conversations, waiting, approved, undone; links to History /
+        Audit log; a note without the database). `GET /api/profile` (never the token). The repo
+        picker is now `shared/ui/repo-picker.ts`, used by the nav and Settings. Avatars and links
+        only from `avatars.githubusercontent.com` / `github.com`.
   - [ ] Deploy (hosted Postgres): host not chosen yet.
 
 ## Agent server notes

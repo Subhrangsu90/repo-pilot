@@ -187,6 +187,33 @@ describe('runAgent', () => {
     expect(thread.filter((m) => m.role === 'user')).toHaveLength(7);
   });
 
+  it('reminds the model once when it replies with nothing, and the user gets its real answer', async () => {
+    const model = scripted({ text: '' }, { text: 'It is a small Angular app with 8 open PRs.' });
+    const { run, events, thread } = setup(model);
+    await run('give details about this repo');
+
+    expect(model.requests).toHaveLength(2);
+    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('Your last reply was empty') });
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['It is a small Angular app with 8 open PRs.']);
+    expect(thread.at(-1)).toMatchObject({ role: 'assistant', text: 'It is a small Angular app with 8 open PRs.' });
+  });
+
+  it('says so instead of showing nothing when the model stays empty', async () => {
+    const model = scripted({ text: '' }, { text: '  ' });
+    const { run, events } = setup(model);
+    expect(await run('give details about this repo')).toEqual({ status: 'done' });
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual([expect.stringContaining('could not produce an answer')]);
+    expect(model.requests).toHaveLength(2);
+  });
+
+  it('does not nag when a tool already showed the answer', async () => {
+    const model = scripted({ toolCalls: [{ id: 'c1', name: 'list_pull_requests', args: {} }] }, { text: '' });
+    const { run, events } = setup(model);
+    await run('Show my open PRs');
+    expect(model.requests).toHaveLength(2);
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT')).toEqual([]);
+  });
+
   it('stops after the iteration limit', async () => {
     const loop = { toolCalls: [{ id: 'c', name: 'list_pull_requests', args: {} }] };
     const { events, run } = setup(scripted(loop, loop, loop, loop), { maxIterations: 3 });

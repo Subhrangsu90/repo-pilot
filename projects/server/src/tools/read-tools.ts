@@ -229,10 +229,26 @@ query ($owner: String!, $name: String!, $since: GitTimestamp!) {
     }
     defaultBranchRef {
       name
-      target { ... on Commit { history(since: $since, first: 100) { totalCount nodes { committedDate author { user { login } } } } } }
+      target { ... on Commit { history(since: $since, first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { committedDate author { user { login } } } } } }
     }
   }
 }`;
+
+/** Further pages of the same commit history (GitHub returns at most 100 commits per page). */
+const HISTORY_PAGE_QUERY = `
+query ($owner: String!, $name: String!, $since: GitTimestamp!, $after: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      target { ... on Commit { history(since: $since, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { committedDate author { user { login } } } } } }
+    }
+  }
+}`;
+
+/** Commits counted per health report at most (5 pages): enough for 12 weeks of most repos. */
+const MAX_COMMIT_PAGES = 5;
+
+type CommitNode = { committedDate: string; author: { user: { login: string } | null } };
+type HistoryPage = { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: CommitNode[] };
 
 interface HealthData {
   repository: {
@@ -250,7 +266,7 @@ interface HealthData {
     };
     defaultBranchRef: {
       name: string;
-      target: { history: { totalCount: number; nodes: { committedDate: string; author: { user: { login: string } | null } }[] } };
+      target: { history: HistoryPage & { totalCount: number } };
     } | null;
   } | null;
 }
@@ -267,8 +283,22 @@ export const runGetRepoHealth: Executor<typeof getRepoHealth> = async (input, ct
   if (!r) throw new ToolError(`Repository ${repo.full} not found.`);
 
   const stalePrs = r.openPrs.nodes.filter((p) => ageDays(p.updatedAt, now) >= STALE_DAYS).length;
-  const commits = r.defaultBranchRef?.target.history.nodes ?? [];
   const branch = r.defaultBranchRef?.name ?? 'default branch';
+  // Every commit of the period, page by page, so the weekly chart counts them all.
+  const commits: CommitNode[] = [...(r.defaultBranchRef?.target.history.nodes ?? [])];
+  let page: HistoryPage | undefined = r.defaultBranchRef?.target.history;
+  for (let n = 1; n < MAX_COMMIT_PAGES && page?.pageInfo.hasNextPage && page.pageInfo.endCursor; n++) {
+    const next: { repository: { defaultBranchRef: { target: { history: HistoryPage } } | null } | null } = await ctx.github.graphql(HISTORY_PAGE_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      since: since.toISOString(),
+      after: page.pageInfo.endCursor,
+    });
+    page = next.repository?.defaultBranchRef?.target.history;
+    commits.push(...(page?.nodes ?? []));
+  }
+  const totalCommits = r.defaultBranchRef?.target.history.totalCount ?? 0;
+  const countedAll = commits.length >= totalCommits;
 
   // Weekly buckets, oldest first, labelled by week start ("Oct 20").
   const points = Array.from({ length: WEEKS }, (_, i) => {
@@ -299,8 +329,11 @@ export const runGetRepoHealth: Executor<typeof getRepoHealth> = async (input, ct
     openPullRequests: r.openPrs.totalCount,
     stalePullRequests: stalePrs,
     openIssues: r.openIssues.totalCount,
-    commitsLast12Weeks: r.defaultBranchRef?.target.history.totalCount ?? 0,
-    topContributors: contributors.slice(0, 3),
+    commitsLast12Weeks: totalCommits,
+    // The same numbers as the chart, so follow-ups like "commits per week" can be answered.
+    commitsPerWeek: points.map((p) => ({ weekStarting: p.label, commits: p.value })),
+    ...(countedAll ? {} : { note: `Weekly counts and contributors cover the latest ${commits.length} of ${totalCommits} commits.` }),
+    contributors,
     oldestIssues: oldest.map(({ number, title, ageDays: age }) => ({ number, title, ageDays: age })),
     ...(injectionWarning ? { injectionWarning } : {}),
   };
@@ -311,7 +344,7 @@ export const runGetRepoHealth: Executor<typeof getRepoHealth> = async (input, ct
       component: 'Section',
       props: {
         title: `Health report · ${repo.full}`,
-        description: `Last ${WEEKS} weeks on ${branch}.`,
+        description: `Last ${WEEKS} weeks on ${branch}.${countedAll ? '' : ` Chart and contributors cover the latest ${commits.length} of ${totalCommits} commits.`}`.slice(0, 240),
         children: [
           {
             component: 'Grid',

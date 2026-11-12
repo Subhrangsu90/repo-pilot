@@ -50,6 +50,11 @@ export const routes: Routes = [
         loadComponent: () => import('./features/history/history').then((m) => m.History),
       },
       {
+        path: 'settings',
+        title: 'Profile & settings · RepoPilot',
+        loadComponent: () => import('./features/settings/settings').then((m) => m.Settings),
+      },
+      {
         path: 'audit',
         title: 'Audit log · RepoPilot',
         loadComponent: () => import('./features/audit/audit-log').then((m) => m.AuditLog),

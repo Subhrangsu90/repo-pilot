@@ -164,6 +164,8 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
   const reviewOwed = () => !deps.readOnly && reviewTarget() !== undefined && !reviewShown && !deps.signal?.aborted;
   /** The model's last words before it was reminded to draft the review. */
   let beforeNudge: string | undefined;
+  /** The model was reminded once that its reply was empty. */
+  let emptyNudged = false;
 
   /** The model is finished: end the run, or first draft the review it did not write. */
   const finish = async (text: string): Promise<AgentOutcome> => {
@@ -209,7 +211,20 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
       continue;
     }
     if (reply.text.trim()) emitText(emit, `${deps.runId}-msg-${i}`, reply.text.trim());
-    if (reply.toolCalls.length === 0) return finish(reply.text);
+    if (reply.toolCalls.length === 0) {
+      // Small models sometimes answer with nothing at all: the user would see only a finished step.
+      if (!reply.text.trim() && !uiShown && !deps.signal?.aborted) {
+        if (!emptyNudged && i < max - 1) {
+          emptyNudged = true;
+          thread.push({ role: 'user', text: EMPTY_REMINDER });
+          continue;
+        }
+        const note = 'I could not produce an answer to that. Try asking it another way, or switch to the Cloud model.';
+        thread.push({ role: 'assistant', text: note, toolCalls: [] });
+        emitText(emit, `${deps.runId}-msg-empty`, note);
+      }
+      return finish(reply.text);
+    }
 
     const results: ToolResult[] = [];
     let pending: PendingApproval | undefined;
@@ -250,6 +265,9 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
   emitText(emit, `${deps.runId}-msg-limit`, `I stopped after ${max} steps. Try a more specific request.`);
   return finish('');
 }
+
+const EMPTY_REMINDER =
+  '[RepoPilot app] Your last reply was empty, so the user saw nothing. Answer their last message now: call a tool if it needs repository data, otherwise reply in one to three sentences.';
 
 function reviewReminder(number: number): string {
   return `[RepoPilot app] No review draft exists yet: submit_pull_request_review was not called, so the user sees nothing to review. Call submit_pull_request_review now for pull request #${number}, with comments only on real problems (an empty list is fine). Never say a draft exists before the tool was called.`;

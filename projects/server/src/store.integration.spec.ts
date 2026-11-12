@@ -124,6 +124,8 @@ maybe('Store (Postgres)', () => {
     expect(await store.getAudit(seq, ME)).toBeNull();
     expect((await store.listAudit('all', ME)).map((e) => e.id)).not.toContain(id);
 
+    // The profile page's counts are per user too.
+    expect(await store.countsFor('someone-else')).toEqual({ sessions: 1, waiting: 0, changes: 1, undone: 0 });
     expect(await store.getSession(t.id, 'someone-else')).not.toBeNull();
     expect(await store.getAudit(seq, 'someone-else')).toMatchObject({ approvedBy: 'someone-else' });
   });

@@ -52,6 +52,20 @@ export class GitHub {
     return body.data as T;
   }
 
+  /**
+   * The token's user and, for OAuth tokens, the scopes GitHub actually granted
+   * (`x-oauth-scopes`; fine-grained tokens send none, so `scopes` is null).
+   */
+  async me<T>(): Promise<{ user: T; scopes: string[] | null }> {
+    const res = await fetch('https://api.github.com/user', { headers: this.headers(), signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) throw new GitHubError(`GitHub GET /user: ${await message(res)}`, res.status);
+    const header = res.headers.get('x-oauth-scopes');
+    return {
+      user: (await res.json()) as T,
+      scopes: header === null ? null : header.split(',').map((s) => s.trim()).filter(Boolean),
+    };
+  }
+
   /** Login of the token's user, for "@me". Cached. */
   login(): Promise<string> {
     this.viewer ??= this.rest<{ login: string }>('/user').then((u) => u.login);

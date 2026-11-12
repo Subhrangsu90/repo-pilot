@@ -6,7 +6,7 @@ import { filter, map } from 'rxjs';
 import { ModelChoice } from '../core/model-choice';
 import { ServerStatus } from '../core/server-status';
 import { Auth } from '../core/auth';
-import { RepoChoice, type RepoItem } from '../core/repo';
+import { RepoPicker } from '../shared/ui/repo-picker';
 import { REGISTRY } from '../genui/registry';
 import { GENUI_REGISTRY } from '../genui/registry-token';
 import { Theme } from '../core/theme';
@@ -47,7 +47,7 @@ const MODELS: { value: ModelOption; label: string }[] = [
  */
 @Component({
   selector: 'app-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, Logo],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, Logo, RepoPicker],
   // The component catalog loads with the app pages, not with the landing page.
   providers: [{ provide: GENUI_REGISTRY, useValue: REGISTRY }],
   host: { class: 'flex min-h-dvh flex-col min-[780px]:flex-row' },
@@ -58,35 +58,7 @@ const MODELS: { value: ModelOption; label: string }[] = [
     >
       <a routerLink="/" class="self-start rounded-sm px-2 py-1" aria-label="RepoPilot home"><app-logo /></a>
 
-      <!-- Every repository the user can access (public and private). Pages and the agent work on this one. -->
-      <div class="flex flex-col gap-1.5">
-        <label for="repo-picker" class="px-1 text-caption text-fg-faint">Repository</label>
-        @if (repos.repos().length) {
-          <div class="relative">
-            <select
-              id="repo-picker"
-              class="field w-full cursor-pointer appearance-none pr-9 font-mono text-body-sm"
-              [value]="repos.selected() ?? ''"
-              [title]="repos.selected() ?? ''"
-              (change)="pick($event)"
-            >
-              @for (r of repos.repos(); track r.full) {
-                <option [value]="r.full" [selected]="r.full === repos.selected()">{{ label(r) }}</option>
-              }
-            </select>
-            <app-icon name="chevron-down" [size]="16" class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-fg-muted" />
-          </div>
-        } @else if (repos.list.isLoading()) {
-          <div class="h-11 animate-pulse rounded-md bg-surface-3" aria-hidden="true"></div>
-        } @else if (repos.list.error()) {
-          <p class="flex flex-wrap items-center gap-2 px-1 text-body-sm text-fg-muted" role="alert">
-            Could not list your repositories.
-            <button type="button" class="btn btn-ghost px-3" (click)="repos.list.reload()">Retry</button>
-          </p>
-        } @else {
-          <p class="px-1 text-body-sm text-fg-muted">Your GitHub account has no repositories RepoPilot can see.</p>
-        }
-      </div>
+      <app-repo-picker [compact]="true" />
 
       <ul class="flex flex-col gap-1">
         @for (item of nav; track item.label) {
@@ -137,11 +109,22 @@ const MODELS: { value: ModelOption; label: string }[] = [
             }
           </div>
         }
-        @if (auth.mode() === 'oauth' && auth.user(); as u) {
-          <div class="flex min-h-11 items-center justify-between gap-2 px-1">
-            <span class="min-w-0 truncate font-mono text-body-sm text-fg-muted"><span class="sr-only">Signed in as </span>{{ u.login }}</span>
-            <button type="button" class="btn btn-ghost shrink-0 px-3" (click)="auth.signOut()">Sign out</button>
-          </div>
+        @if (auth.user(); as u) {
+          <a
+            routerLink="/settings"
+            routerLinkActive="bg-surface-3 text-fg"
+            ariaCurrentWhenActive="page"
+            class="flex min-h-11 items-center gap-2.5 rounded-sm px-2 text-body-sm text-fg-muted hover:text-fg"
+            aria-label="Profile and settings"
+          >
+            @if (status.viewer()?.avatarUrl; as avatar) {
+              <img [src]="avatar" alt="" width="24" height="24" class="size-6 shrink-0 rounded-full bg-surface-3" referrerpolicy="no-referrer" />
+            } @else {
+              <span class="grid size-6 shrink-0 place-items-center rounded-full bg-surface-3 text-caption font-semibold uppercase" aria-hidden="true">{{ u.login.slice(0, 2) }}</span>
+            }
+            <span class="min-w-0 flex-1 truncate font-mono">{{ u.login }}</span>
+            <span class="shrink-0 text-caption text-fg-faint">Settings</span>
+          </a>
         }
         <button type="button" class="btn btn-ghost justify-start px-3" (click)="theme.toggle()">
           <app-icon [name]="theme.current() === 'graphite' ? 'sun' : 'moon'" />
@@ -160,19 +143,7 @@ export class Shell {
   protected readonly model = inject(ModelChoice);
   protected readonly theme = inject(Theme);
   protected readonly auth = inject(Auth);
-  protected readonly repos = inject(RepoChoice);
 
-  /** "repo-pilot", "site · private", "js-loops · chaicodehq": the owner only when it is not you. */
-  protected label(r: RepoItem): string {
-    const [owner, name] = r.full.split('/');
-    const mine = owner.toLowerCase() === (this.auth.user()?.login ?? '').toLowerCase();
-    return [name, mine ? null : owner, r.private ? 'private' : null].filter(Boolean).join(' · ');
-  }
-
-  protected pick(event: Event) {
-    const full = (event.target as HTMLSelectElement).value;
-    if (full) this.repos.select(full);
-  }
   protected readonly nav = NAV;
   protected readonly models = MODELS;
 

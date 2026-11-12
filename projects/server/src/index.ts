@@ -179,6 +179,63 @@ interface RepoJson {
  * collaborator, organization), most recently pushed first. Private ones need the
  * `repo` OAuth scope (GITHUB_OAUTH_SCOPE).
  */
+interface GitHubUserJson {
+  login: string;
+  name: string | null;
+  avatar_url: string;
+  html_url: string;
+  company: string | null;
+  location: string | null;
+  bio: string | null;
+  public_repos: number;
+  total_private_repos?: number;
+  created_at: string;
+}
+
+/**
+ * The profile page: who you are on GitHub, how RepoPilot reaches GitHub for you
+ * (sign-in mode, the scopes GitHub granted, where to revoke access) and how much
+ * you have done here. Never the token.
+ */
+app.get('/api/profile', async (req, reply) => {
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const { login, ctx } = who(req);
+  try {
+    const [{ user, scopes }, counts] = await Promise.all([
+      ctx.github.me<GitHubUserJson>(),
+      store ? store.countsFor(login).catch(() => null) : Promise.resolve(null),
+    ]);
+    return {
+      user: {
+        login: user.login,
+        name: user.name,
+        avatarUrl: user.avatar_url,
+        url: user.html_url,
+        company: user.company,
+        location: user.location,
+        bio: user.bio?.slice(0, 300) ?? null,
+        publicRepos: user.public_repos,
+        privateRepos: user.total_private_repos ?? null,
+        createdAt: user.created_at,
+      },
+      access: {
+        mode: auth.mode,
+        // OAuth: what GitHub granted (may be less than requested). Dev mode: a fine-grained token has no scopes.
+        scopes,
+        requestedScope: auth.mode === 'oauth' ? config.GITHUB_OAUTH_SCOPE : null,
+        manageUrl:
+          auth.mode === 'oauth'
+            ? `https://github.com/settings/connections/applications/${config.GITHUB_OAUTH_CLIENT_ID}`
+            : 'https://github.com/settings/personal-access-tokens',
+      },
+      // null without the database (History and the Audit log are off then).
+      activity: counts,
+    };
+  } catch (err) {
+    return githubFailure(req, reply, err, 'profile');
+  }
+});
+
 app.get('/api/repos', async (req, reply) => {
   if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
   try {

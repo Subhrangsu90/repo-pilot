@@ -171,6 +171,25 @@ export class Store {
     return { ...session, runs: r };
   }
 
+  /** The profile page's "Your data": this user's conversations and the changes they approved. */
+  async countsFor(userId: string): Promise<{ sessions: number; waiting: number; changes: number; undone: number }> {
+    const [s] = await this.db
+      .select({
+        sessions: sql<number>`count(*)::int`,
+        waiting: sql<number>`count(*) filter (where ${sessions.status} = 'awaiting-approval')::int`,
+      })
+      .from(sessions)
+      .where(eq(sessions.userId, userId));
+    const [a] = await this.db
+      .select({
+        changes: sql<number>`count(*) filter (where ${auditEntries.ok})::int`,
+        undone: sql<number>`count(*) filter (where ${auditEntries.undoneAt} is not null)::int`,
+      })
+      .from(auditEntries)
+      .where(eq(auditEntries.approvedBy, userId));
+    return { sessions: s?.sessions ?? 0, waiting: s?.waiting ?? 0, changes: a?.changes ?? 0, undone: a?.undone ?? 0 };
+  }
+
   async renameSession(id: string, title: string, userId: string): Promise<boolean> {
     const r = await this.db.update(sessions).set({ title, updatedAt: new Date() }).where(and(eq(sessions.id, id), eq(sessions.userId, userId))).returning({ id: sessions.id });
     return r.length > 0;

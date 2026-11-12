@@ -25,7 +25,7 @@ export class ModelChoice {
   private readonly picked = signal<ModelOption | null>(readStored());
 
   private readonly serverDefault = computed<ModelOption>(() =>
-    valueOf(this.status.health)?.llm.provider === 'ollama' ? 'local' : 'cloud',
+    valueOf(this.status.health)?.llm?.provider === 'ollama' ? 'local' : 'cloud',
   );
 
   /** What the switch shows. */
