@@ -27,6 +27,11 @@ export const routes: Routes = [
         loadComponent: () => import('./features/pulls/pull-review').then((m) => m.PullReview),
       },
       {
+        path: 'issues',
+        title: 'Issues · RepoPilot',
+        loadComponent: () => import('./features/issues/issue-list').then((m) => m.IssueList),
+      },
+      {
         path: 'releases',
         title: 'Releases · RepoPilot',
         loadComponent: () => import('./features/releases/release-builder').then((m) => m.ReleaseBuilder),

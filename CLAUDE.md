@@ -59,7 +59,7 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   entries, then sessions/History). A hosted Postgres is chosen at deploy time (week 4).
 - Routes: `/` landing (public), app pages inside the `Shell` layout: `/ask` (chat; `?q=` sends a
   prompt). The side nav shows the Screen Spec's six links (Ask, Pull requests, Issues, Releases,
-  History, Audit log) with live PR/issue counts; unbuilt ones are dimmed, not links ("Coming soon"),
+  History, Audit log) with live PR/issue counts (all six built as of 2026-11-12); unbuilt ones are dimmed, not links ("Coming soon"),
   and get a `path` in `NAV` (`layout/shell.ts`) as each page is built. Model switch on Ask only;
   each page draws its own top bar (Ask: repo, API quota, avatar); theme toggle sits in the nav foot.
   `/playground` is a dev-only renderer test page, out of the nav and landing (URL only).
@@ -195,10 +195,17 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       `get_release_changes` (model note only, no UI); flagged rows/cards carry `injection: true`
       (IssueRow, PrCard) and show `InjectionBadge`; `get_pull_request` and the review dry run check
       the PR title as well as the body. No false alarms on the demo repo's 17 titles; no planted
-      title injection exists, so the badge is covered by tests only. `ng test` sometimes prints
-      "no tests" on the first run after source changes; a re-run passes. Then: Issues page (last dimmed nav link), last-6-turns + summary context (doc §9b
-      step 5; needed for the "only show bugs" follow-up), agent naming sessions (now: first line of
-      the prompt), Refresh on stale surfaces.
+      title injection exists, so the badge is covered by tests only. `ng test` sometimes fails on
+      the first (cold) run with "Timeout waiting for worker to respond" / "no tests"; a re-run passes.
+      Issues page (2026-11-12, no artboard; user chose "list + bulk close via agent"): `/issues`,
+      `GET /api/issues?state=open|closed|all` (reuses `list_issues`: validated rows with injection
+      flags, max 100), state chips + label chips (labels filtered in the browser), selectable
+      IssueTable → "Close N…" / "Reopen N…" sends "Close issues #9 and #10 as not planned" to the
+      page's own AgentSession; only the ApprovalCard + steps are shown (the table is already there);
+      list and nav counts reload when the run settles. Verified with Gemma via the API: card listed
+      exactly #9, #10; rejected, nothing changed. Not yet clicked through in the browser.
+      Then: last-6-turns + summary context (doc §9b step 5; needed for the "only show bugs"
+      follow-up), agent naming sessions (now: first line of the prompt), Refresh on stale surfaces.
 - [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff
       lines), recorded event-stream fixtures + mock agent, Playwright e2e, GitHub OAuth, deploy
       (hosted Postgres).

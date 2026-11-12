@@ -27,7 +27,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { label: 'Ask', icon: 'ask', path: '/ask' },
   { label: 'Pull requests', icon: 'pull-request', path: '/pulls', count: 'pulls' },
-  { label: 'Issues', icon: 'issue', count: 'issues' },
+  { label: 'Issues', icon: 'issue', path: '/issues', count: 'issues' },
   { label: 'Releases', icon: 'release', path: '/releases' },
   { label: 'History', icon: 'history', path: '/history' },
   { label: 'Audit log', icon: 'audit', path: '/audit' },

@@ -24,7 +24,7 @@ import { GitHub } from './github/client';
 import { createProvider } from './llm';
 import { fetchPullRequest } from './github/pulls';
 import { actions } from './tools/actions';
-import { executors, resolveRepo, runListPullRequests, type ToolContext } from './tools/read-tools';
+import { executors, resolveRepo, runListIssues, runListPullRequests, type ToolContext } from './tools/read-tools';
 
 const app = Fastify({ logger: { level: 'info' } });
 const github = new GitHub(config.GITHUB_TOKEN ?? '');
@@ -128,6 +128,28 @@ app.get('/api/pulls', async (req, reply) => {
     return { repo: config.GITHUB_REPO_ALLOWLIST[0], items: (out.ui?.props as { items: unknown[] }).items };
   } catch (err) {
     req.log.warn({ err: (err as Error).message }, 'pull list failed');
+    return reply.code(502).send({ error: 'GitHub did not answer.' });
+  }
+});
+
+const IssuesQuery = z.object({ state: z.enum(['open', 'closed', 'all']).default('open') });
+const ISSUE_LIMIT = 100;
+
+/**
+ * The Issues page: issues of the default repo as IssueTable rows (validated and
+ * injection-flagged like the agent's list_issues, which this reuses). Labels
+ * are filtered in the browser. Changes go through the agent and its approval card.
+ */
+app.get('/api/issues', async (req, reply) => {
+  const query = IssuesQuery.safeParse(req.query);
+  if (!query.success) return reply.code(400).send({ error: 'state must be open, closed or all.' });
+  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  try {
+    const out = await runListIssues({ state: query.data.state, labels: [], limit: ISSUE_LIMIT }, toolCtx);
+    const rows = (out.ui?.props as { rows: unknown[] }).rows;
+    return { repo: config.GITHUB_REPO_ALLOWLIST[0], rows, truncated: rows.length === ISSUE_LIMIT };
+  } catch (err) {
+    req.log.warn({ err: (err as Error).message }, 'issue list failed');
     return reply.code(502).send({ error: 'GitHub did not answer.' });
   }
 });
