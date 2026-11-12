@@ -1,11 +1,23 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
+    "a2ui": {
+      "source": "a2ui-project/a2ui",
+      "sourceType": "github",
+      "skillPath": "skills/a2ui/SKILL.md",
+      "computedHash": "d29de8b9d6daddb3191ad1e011adb3881bd46454c90be7fb63d67c701b4f767d"
+    },
+    "a2ui-migration": {
+      "source": "a2ui-project/a2ui",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/a2ui-migration/SKILL.md",
+      "computedHash": "c5f8a8a1353665979e3e8740d6823953825d7332c6b0fff290af574c658de902"
+    },
     "angular-developer": {
       "source": "angular/skills",
       "sourceType": "github",
       "skillPath": "angular-developer/SKILL.md",
-      "computedHash": "b92225159ef7f1b48e2575e421ecce246c2d3201dcafe4285b85c9ebd5f2d76c"
+      "computedHash": "c63f40fdb24ce1696fdf2597bc72e16cd9d3d9f32ada77e9d0bec25c940433fa"
     }
   }
 }
