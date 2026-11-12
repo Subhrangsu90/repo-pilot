@@ -174,6 +174,19 @@ describe('runAgent', () => {
     expect(received).toEqual({ state: 'open', limit: 20 });
   });
 
+  it('sends the model the last 6 turns and a summary of older ones, but keeps the whole thread', async () => {
+    const model = scripted();
+    const { run, thread } = setup(model);
+    for (let n = 1; n <= 7; n++) await run(`question ${n}`);
+
+    const last = model.requests.at(-1)!;
+    expect(last.messages[0]).toEqual({ role: 'user', text: 'question 2' });
+    expect(last.messages.filter((m) => m.role === 'user')).toHaveLength(6);
+    expect(last.system).toContain('Earlier in this conversation');
+    expect(last.system).toContain('- User: "question 1" → agent: "done"');
+    expect(thread.filter((m) => m.role === 'user')).toHaveLength(7);
+  });
+
   it('stops after the iteration limit', async () => {
     const loop = { toolCalls: [{ id: 'c', name: 'list_pull_requests', args: {} }] };
     const { events, run } = setup(scripted(loop, loop, loop, loop), { maxIterations: 3 });

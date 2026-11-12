@@ -204,8 +204,15 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       page's own AgentSession; only the ApprovalCard + steps are shown (the table is already there);
       list and nav counts reload when the run settles. Verified with Gemma via the API: card listed
       exactly #9, #10; rejected, nothing changed. Not yet clicked through in the browser.
-      Then: last-6-turns + summary context (doc §9b step 5; needed for the "only show bugs"
-      follow-up), agent naming sessions (now: first line of the prompt), Refresh on stale surfaces.
+      Context window (2026-11-12, doc §9b step 5): `agent/context.ts` `contextWindow()` sends the
+      model the last 6 turns whole (a turn starts at a user prompt; `[RepoPilot app]` notes are not
+      prompts, so tool calls, results and `raw` parts are never split) and appends older turns to
+      the system prompt as a summary. Differs from the doc on purpose: the summary is built in code
+      (prompt → tools run and how they ended → the agent's reply, ≤ 4000 chars, oldest lines
+      dropped first), not by a model call, so it costs no quota, cannot invent facts and needs no
+      `summary` column; the stored thread stays complete. Follow-ups such as "only show bugs"
+      never depended on this (the whole thread was sent before). Checked on stored sessions.
+      Then: agent naming sessions (now: first line of the prompt), Refresh on stale surfaces.
 - [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff
       lines), recorded event-stream fixtures + mock agent, Playwright e2e, GitHub OAuth, deploy
       (hosted Postgres).

@@ -1,6 +1,7 @@
 import { AgentEvent, getPullRequest, getToolSpec, needsApproval, PropsOf, submitPullRequestReview, toolStepId, validateNode } from '@repopilot/shared';
 import type { ChatMessage, LlmProvider, LlmToolDef, ToolCall, ToolResult } from '../llm';
 import type { ActionTool } from '../tools/actions';
+import { contextWindow, withSummary } from './context';
 import type { Inverse } from '../tools/undo';
 import { Executor, ToolContext, ToolError } from '../tools/read-tools';
 
@@ -170,7 +171,14 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
     emit({ type: 'STEP_STARTED', stepId: thinkId, stepName: i === 0 && !uiShownBefore ? 'Understanding the request' : 'Reviewing results' });
     let reply;
     try {
-      reply = await provider.generate({ system: deps.system, messages: thread, tools: deps.tools, signal: deps.signal });
+      // The last turns in full, older ones as a summary; the thread itself keeps everything.
+      const context = contextWindow(thread);
+      reply = await provider.generate({
+        system: withSummary(deps.system, context.summary),
+        messages: context.messages,
+        tools: deps.tools,
+        signal: deps.signal,
+      });
     } catch (err) {
       emit({ type: 'STEP_FINISHED', stepId: thinkId, status: 'error', detail: (err as Error).message.slice(0, 200) });
       // The model went down after its reminder: the review it owes is still drafted, from its earlier reply.
