@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { afterEach, vi } from 'vitest';
+import { vi } from 'vitest';
 import type { GitHub } from '../github/client';
 import { createAuth, safeNext } from './index';
 import { cookie, readCookie, seal, unseal } from './seal';

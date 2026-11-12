@@ -10,7 +10,7 @@ Full design: [docs/project-documentation.md](docs/project-documentation.md).
 | --- | --- | --- |
 | `projects/web` | Angular 22 app (`@repopilot/web`) | `npm run dev:web` → `http://localhost:4200` |
 | `projects/server` | Node agent server, Fastify + tsx (`@repopilot/server`) | `npm run dev:server` → `http://localhost:3000/api/health` |
-| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, prompt doc, fixtures | `npm test -w @repopilot/shared` |
+| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, prompt doc, tools, GitHub URLs | `npm test -w @repopilot/shared` |
 
 `@repopilot/shared` exports TypeScript source (no build step). The web app resolves it
 through a `paths` entry in `projects/web/tsconfig.json`; the server runs it through tsx.
@@ -352,7 +352,7 @@ does not check Angular templates; `ng build` does.
 - `GET /api/pulls` (open PRs as PrCard props) and `GET /api/pulls/:number` (header, no diff) serve
   the pages; the review page runs its own `AgentSession` (component provider) separate from Ask.
 - `GET /api/overview` → `{repo, openPullRequests, openIssues, rateLimit, viewer}` (one GraphQL call)
-  for the nav counts and the Ask top bar; the client reloads it after each run.
+  for the nav counts and the API quota in Settings; the client reloads it after each run.
 - Follow-up chips: `agent/followups.ts` picks up to 3 prompts from the components a run showed and
   sends `CUSTOM followups` before RUN_FINISHED (not while an approval waits). Only prompts the
   current tools can answer.
