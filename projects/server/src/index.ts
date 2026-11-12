@@ -1,6 +1,6 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import * as z from 'zod';
-import { componentNames, type AgentEvent, type ModelOption } from '@repopilot/shared';
+import { componentNames, githubUrl, type AgentEvent, type ModelOption } from '@repopilot/shared';
 import { config, type Config } from './config';
 import { createAuth } from './auth';
 import { trackFollowups } from './agent/followups';
@@ -225,8 +225,8 @@ app.get('/api/profile', async (req, reply) => {
         requestedScope: auth.mode === 'oauth' ? config.GITHUB_OAUTH_SCOPE : null,
         manageUrl:
           auth.mode === 'oauth'
-            ? `https://github.com/settings/connections/applications/${config.GITHUB_OAUTH_CLIENT_ID}`
-            : 'https://github.com/settings/personal-access-tokens',
+            ? githubUrl.oauthAppAccess(config.GITHUB_OAUTH_CLIENT_ID ?? '')
+            : githubUrl.personalTokens,
       },
       // null without the database (History and the Audit log are off then).
       activity: counts,

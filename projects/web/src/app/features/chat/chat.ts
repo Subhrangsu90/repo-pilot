@@ -29,34 +29,12 @@ function componentOf(node: unknown): string {
   imports: [GenUiHost, StepTimeline, Icon],
   host: { class: 'flex flex-1 flex-col' },
   template: `
-    <!-- Top bar (Screen Spec: Ask only): repo path, GitHub API quota, the account the token belongs to. -->
-    <header class="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-8">
-      @if (status.repo(); as repo) {
-        <span class="font-mono text-body-md text-fg-muted">
-          {{ repo.owner }} / <span class="text-fg">{{ repo.name }}</span>
-        </span>
-      } @else if (status.health.error()) {
-        <span class="text-body-sm text-danger">Agent server not reachable</span>
-      } @else {
-        <span></span>
-      }
-      <div class="flex items-center gap-4">
-        @if (status.quota(); as q) {
-          <span class="text-body-sm text-fg-muted" title="GitHub API points left this hour">
-            API quota <span class="font-mono text-fg tabular-nums">{{ q.text }}</span>
-          </span>
-        }
-        @if (status.viewer(); as v) {
-          @if (v.avatarUrl) {
-            <img [src]="v.avatarUrl" [alt]="'GitHub account: ' + v.login" class="size-8 rounded-full bg-surface-3" width="32" height="32" />
-          } @else {
-            <span class="grid size-8 place-items-center rounded-full bg-surface-3 text-caption font-semibold uppercase" [attr.aria-label]="'GitHub account: ' + v.login">
-              {{ v.login.slice(0, 2) }}
-            </span>
-          }
-        }
-      </div>
-    </header>
+    <!-- No top bar: the repository is picked in the side nav, the account and API quota live in Settings. -->
+    @if (status.health.error()) {
+      <p class="border-b border-danger px-4 py-3 text-body-sm text-danger sm:px-8" role="alert">
+        The agent server is not reachable. Check that it is running, then reload the page.
+      </p>
+    }
 
     <div class="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-6 px-4 py-8 sm:px-8">
       @if (session.turns().length === 0) {

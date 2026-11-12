@@ -2,6 +2,7 @@ import { httpResource } from '@angular/common/http';
 import { valueOf } from './resource';
 import { computed, inject, Injectable } from '@angular/core';
 import { RepoChoice } from './repo';
+import { isGitHubAvatar } from '@repopilot/shared';
 
 /** The non-secret part of GET /api/health. */
 export interface Health {
@@ -19,8 +20,6 @@ export interface Overview {
   viewer: { login: string; avatarUrl: string };
 }
 
-/** Only GitHub's avatar CDN over https may load in the browser. */
-const AVATAR = /^https:\/\/avatars\.githubusercontent\.com\//;
 
 /** Shared server requests for the app chrome (shell, model switch, Ask top bar). */
 @Injectable({ providedIn: 'root' })
@@ -49,6 +48,6 @@ export class ServerStatus {
 
   readonly viewer = computed(() => {
     const v = valueOf(this.overview)?.viewer;
-    return v ? { login: v.login, avatarUrl: AVATAR.test(v.avatarUrl) ? v.avatarUrl : null } : null;
+    return v ? { login: v.login, avatarUrl: isGitHubAvatar(v.avatarUrl) ? v.avatarUrl : null } : null;
   });
 }

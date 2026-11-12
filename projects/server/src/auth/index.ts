@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { githubUrl } from '@repopilot/shared';
 import { GitHub } from '../github/client';
 import { cookie, readCookie, seal, unseal } from './seal';
 
@@ -101,7 +102,7 @@ export function createAuth(opts: AuthOptions) {
       const next = safeNext(req.query.next);
       if (mode !== 'oauth') return reply.redirect(next);
       const state = randomBytes(24).toString('base64url');
-      const url = new URL('https://github.com/login/oauth/authorize');
+      const url = new URL(githubUrl.oauthAuthorize);
       url.searchParams.set('client_id', opts.clientId!);
       url.searchParams.set('redirect_uri', `${opts.appUrl}/api/auth/callback`);
       url.searchParams.set('scope', opts.scope);
@@ -177,7 +178,7 @@ function sameString(a: string, b: string) {
 
 /** The OAuth code → access token exchange (server to server; the secret never leaves here). */
 async function exchangeCode(opts: AuthOptions, code: string): Promise<string> {
-  const res = await fetch('https://github.com/login/oauth/access_token', {
+  const res = await fetch(githubUrl.oauthAccessToken, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'repopilot' },
     body: JSON.stringify({ client_id: opts.clientId, client_secret: opts.clientSecret, code, redirect_uri: `${opts.appUrl}/api/auth/callback` }),

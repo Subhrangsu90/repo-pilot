@@ -1,9 +1,10 @@
 import { httpResource } from '@angular/common/http';
 import { Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import type { ModelOption } from '@repopilot/shared';
+import { isGitHubAvatar, isGitHubUrl, type ModelOption } from '@repopilot/shared';
 import { Auth } from '../../core/auth';
 import { ModelChoice } from '../../core/model-choice';
+import { ServerStatus } from '../../core/server-status';
 import { valueOf } from '../../core/resource';
 import { Theme } from '../../core/theme';
 import { Icon } from '../../shared/ui/icon';
@@ -27,9 +28,6 @@ interface Profile {
   activity: { sessions: number; waiting: number; changes: number; undone: number } | null;
 }
 
-/** Only GitHub's avatar CDN and GitHub profile pages, over https. */
-const AVATAR = /^https:\/\/avatars\.githubusercontent\.com\//;
-const GITHUB = /^https:\/\/github\.com\//;
 
 const THEMES = [
   { value: 'graphite', label: 'Graphite' },
@@ -124,6 +122,11 @@ const MODELS: { value: ModelOption; label: string; hint: string }[] = [
             <p class="text-body-md">
               Dev mode: GitHub sign-in is not configured on this server, so RepoPilot acts as the owner of the server's
               access token (<span class="font-mono">{{ p.user.login }}</span>).
+            </p>
+          }
+          @if (status.quota(); as q) {
+            <p class="text-body-sm text-fg-muted">
+              GitHub API requests left this hour: <span class="font-mono text-fg tabular-nums">{{ q.text }}</span>
             </p>
           }
           <p class="text-body-sm text-fg-muted">Every change still waits for your approval, and approved changes can be undone from the Audit log.</p>
@@ -227,6 +230,7 @@ export class Settings {
   protected readonly auth = inject(Auth);
   protected readonly theme = inject(Theme);
   protected readonly model = inject(ModelChoice);
+  protected readonly status = inject(ServerStatus);
   protected readonly themes = THEMES;
   protected readonly models = MODELS;
 
@@ -235,7 +239,7 @@ export class Settings {
 
   protected readonly avatar = computed(() => {
     const url = this.data()?.user.avatarUrl;
-    return url && AVATAR.test(url) ? url : null;
+    return isGitHubAvatar(url) ? url : null;
   });
 
   /** What the granted scopes reach, in words. */
@@ -255,7 +259,7 @@ export class Settings {
   protected readonly modelHint = computed(() => MODELS.find((m) => m.value === this.model.current())?.hint ?? '');
 
   protected safe(url: string): string | null {
-    return GITHUB.test(url) ? url : null;
+    return isGitHubUrl(url) ? url : null;
   }
 
   protected since(iso: string): string {

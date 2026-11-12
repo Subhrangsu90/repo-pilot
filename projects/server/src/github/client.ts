@@ -1,3 +1,5 @@
+import { githubUrl } from '@repopilot/shared';
+
 /**
  * Minimal GitHub client over fetch (REST + GraphQL). The token stays here: it
  * is never logged, never sent to the browser and never given to the model.
@@ -27,7 +29,7 @@ export class GitHub {
   }
 
   async rest<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-    const res = await fetch(`https://api.github.com${path}`, {
+    const res = await fetch(githubUrl.api(path), {
       method: init.method ?? 'GET',
       headers: { ...this.headers(), ...(init.body ? { 'content-type': 'application/json' } : {}) },
       body: init.body ? JSON.stringify(init.body) : undefined,
@@ -40,7 +42,7 @@ export class GitHub {
   }
 
   async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const res = await fetch('https://api.github.com/graphql', {
+    const res = await fetch(githubUrl.graphql, {
       method: 'POST',
       headers: { ...this.headers(), 'content-type': 'application/json' },
       body: JSON.stringify({ query, variables }),
@@ -57,7 +59,7 @@ export class GitHub {
    * (`x-oauth-scopes`; fine-grained tokens send none, so `scopes` is null).
    */
   async me<T>(): Promise<{ user: T; scopes: string[] | null }> {
-    const res = await fetch('https://api.github.com/user', { headers: this.headers(), signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(githubUrl.api('/user'), { headers: this.headers(), signal: AbortSignal.timeout(20_000) });
     if (!res.ok) throw new GitHubError(`GitHub GET /user: ${await message(res)}`, res.status);
     const header = res.headers.get('x-oauth-scopes');
     return {

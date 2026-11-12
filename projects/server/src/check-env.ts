@@ -3,6 +3,7 @@
  * Calls each configured provider with the configured credentials and prints
  * only status codes and non-secret facts. Never prints a key or token.
  */
+import { githubUrl } from '@repopilot/shared';
 import { config } from './config';
 import { resolveModel } from './llm/ollama';
 
@@ -78,7 +79,7 @@ async function checkGitHub() {
     'x-github-api-version': '2022-11-28',
     'user-agent': 'repopilot-check',
   };
-  const gh = (path: string) => fetch(`https://api.github.com${path}`, { headers, signal: AbortSignal.timeout(15_000) });
+  const gh = (path: string) => fetch(githubUrl.api(path), { headers, signal: AbortSignal.timeout(15_000) });
 
   const user = await gh('/user');
   if (!user.ok) return report('GitHub', false, `token rejected: HTTP ${user.status}`);

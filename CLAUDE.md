@@ -63,7 +63,7 @@ does not check Angular templates; `ng build` does.
   prompt). The side nav shows the Screen Spec's six links (Ask, Pull requests, Issues, Releases,
   History, Audit log) with live PR/issue counts (all six built as of 2026-11-12); unbuilt ones are dimmed, not links ("Coming soon"),
   and get a `path` in `NAV` (`layout/shell.ts`) as each page is built. Model switch on Ask only;
-  each page draws its own top bar (Ask: repo, API quota, avatar); theme toggle sits in the nav foot.
+  Ask has no top bar (user's decision 2026-11-12: the repo is in the nav picker, the account in the nav foot, the API quota in Settings; only an alert when the server is unreachable); theme toggle sits in the nav foot.
   `/signin` is outside the Shell (see week 4).
 - Screen Spec (2026-11-11, user's Claude Docs doc): <https://claude.ai/artifact/7PvQ8ojSvhP7zT8EaCvKwp>
   — the 7 screens, shared layout, play-mode behaviour and open gaps; read it with the Claude Docs
@@ -91,6 +91,11 @@ does not check Angular templates; `ng build` does.
   (`headRefName`); IssueTable shows `assignees` ("Unassigned" when empty).
 
 ## Rules that must not break
+
+- Every GitHub address comes from `projects/shared/src/github.ts` (`GITHUB_WEB`, `GITHUB_API`,
+  `GITHUB_AVATARS`, `githubUrl.*` builders, `GITHUB_WEB_HOST` / `GITHUB_AVATAR_HOST` for catalog
+  `z.url` checks, `isGitHubUrl()` / `isGitHubAvatar()` before rendering a link or image). No
+  `https://github.com` or `api.github.com` literals elsewhere (tests excepted).
 
 - The agent renders **only** catalog components. Every node passes `validateNode()` on
   the server and again in `GenUiHost` on the client. Invalid → `ErrorFallback`.
