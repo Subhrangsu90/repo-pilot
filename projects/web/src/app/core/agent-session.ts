@@ -1,9 +1,11 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { computed, inject, Injectable, signal } from '@angular/core';
-import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent, type UiSurface } from '@repopilot/shared';
+import { Router } from '@angular/router';
+import { ReleaseEdits, type AgentEvent, type ApprovalAction, type StartRunRequest, type StartRunResponse, type UiEvent, type UiSurface, type ClientToolCall } from '@repopilot/shared';
 import { firstValueFrom } from 'rxjs';
 import type { SavedSession } from './api';
-import { applyEvent, newTurn, replayRuns, Turn } from './agent-run';
+import { applyEvent, clearFilter, filterTables, newTurn, replayRuns, tableFilterOf, Turn } from './agent-run';
+import { ClientTools } from './client-tools';
 import { ModelChoice } from './model-choice';
 
 /** How current a reopened surface is. */
@@ -26,15 +28,21 @@ export interface Freshness {
 export class AgentSession {
   private readonly http = inject(HttpClient);
   private readonly model = inject(ModelChoice);
+  private readonly router = inject(Router);
+  private readonly clientTools = inject(ClientTools);
   private threadId: string | undefined;
   private source: EventSource | undefined;
   /** A prompt to send as soon as the current run finishes. */
   private queued: string | undefined;
 
   readonly turns = signal<Turn[]>([]);
-  readonly isBusy = computed(() => this.turns().at(-1)?.status === 'running');
-  /** The prompt box stays locked until the waiting card is answered. */
-  readonly awaitingApproval = computed(() => this.turns().at(-1)?.status === 'awaiting-approval');
+  /** A run is streaming (the last turn, or the turn whose approval was just answered). */
+  readonly isBusy = computed(() => this.turns().some((t) => t.status === 'running'));
+  /**
+   * A change waits for approval. New prompts are still allowed: the server runs them as
+   * read-only side questions (read and screen tools only) until the card is answered.
+   */
+  readonly awaitingApproval = computed(() => this.turns().some((t) => t.status === 'awaiting-approval'));
   /** Text in the prompt box; kept here so "Edit request" can refill it. */
   readonly draft = signal('');
   /** Bumped when the prompt box should take focus. */
@@ -74,7 +82,7 @@ export class AgentSession {
 
   async send(prompt: string, opts: { reviewPullRequest?: number } = {}): Promise<void> {
     const text = prompt.trim();
-    if (!text || this.isBusy() || this.awaitingApproval()) return;
+    if (!text || this.isBusy()) return;
 
     const turnId = crypto.randomUUID();
     this.turns.update((list) => [...list, newTurn(turnId, text)]);
@@ -201,7 +209,7 @@ export class AgentSession {
         ),
       );
       this.turns.update((list) =>
-        list.map((t) => ({ ...t, surfaces: t.surfaces.map((s) => (s.surfaceId === surfaceId ? { ...s, node: res.node } : s)) })),
+        list.map((t) => ({ ...t, surfaces: t.surfaces.map((s) => (s.surfaceId === surfaceId ? { surfaceId: s.surfaceId, node: res.node } : s)) })),
       );
       this.setFreshness(surfaceId, { at: res.refreshedAt, refreshed: true, busy: false });
     } catch (err) {
@@ -255,7 +263,39 @@ export class AgentSession {
   }
 
   private update(turnId: string, event: AgentEvent) {
+    if (event.type === 'CUSTOM' && event.name === 'client_tool') {
+      this.runClientTool(event.value);
+      return;
+    }
     this.turns.update((list) => list.map((t) => (t.id === turnId ? applyEvent(t, event) : t)));
+  }
+
+  /**
+   * Client tools from the agent (validated by the server). They only change
+   * what is on screen: filter a table in place, scroll to diff lines, or open a page.
+   */
+  private runClientTool(call: ClientToolCall) {
+    const filter = tableFilterOf({ type: 'CUSTOM', name: 'client_tool', value: call });
+    if (filter) {
+      this.turns.update((list) => filterTables(list, filter));
+      return;
+    }
+    const a = (call.args ?? {}) as Record<string, unknown>;
+    if (call.name === 'highlight_lines' && typeof a['path'] === 'string' && Number.isInteger(a['from']) && Number.isInteger(a['to'])) {
+      const seq = this.clientTools.requestHighlight(a['path'], a['from'] as number, a['to'] as number);
+      // Give the diff views a frame to claim it; otherwise tell the user the lines are not on screen.
+      setTimeout(() => this.clientTools.checkMissed(seq), 300);
+      return;
+    }
+    if (call.name === 'navigate_to') {
+      const route = routeFor(a);
+      if (route) void this.router.navigateByUrl(route);
+    }
+  }
+
+  /** Clear on a table the agent filtered: show the rows it fetched again. */
+  clearFilter(surfaceId: string) {
+    this.turns.update((list) => clearFilter(list, surfaceId));
   }
 
   private patch(turnId: string, changes: Partial<Turn>) {
@@ -285,4 +325,18 @@ function errorMessage(err: unknown): string {
     return err.error?.error ?? (err.status === 0 || err.status === 504 ? 'The agent server is not reachable. Is it running?' : err.message);
   }
   return String(err);
+}
+
+/** navigate_to → an app route, or null for anything unexpected. */
+export function routeFor(args: Record<string, unknown>): string | null {
+  const pages: Record<string, string> = {
+    ask: '/ask',
+    pull_requests: '/pulls',
+    issues: '/issues',
+    releases: '/releases',
+    history: '/history',
+    audit: '/audit',
+  };
+  if (args['page'] === 'pull_request') return Number.isInteger(args['number']) && (args['number'] as number) > 0 ? `/pulls/${args['number']}` : null;
+  return typeof args['page'] === 'string' ? (pages[args['page']] ?? null) : null;
 }

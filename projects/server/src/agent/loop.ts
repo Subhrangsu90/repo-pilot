@@ -24,6 +24,12 @@ export interface AgentDeps {
    * so the page always ends on a review the user can edit and submit.
    */
   reviewPullRequest?: number;
+  /**
+   * A side question while another change waits for approval: only read and
+   * client tools run; any change is refused in code, so the waiting card stays
+   * the only pending change.
+   */
+  readOnly?: boolean;
   /** Called once per executed (or failed) approved change: the audit log. Errors are swallowed. */
   onExecuted?: (change: ExecutedChange) => Promise<void> | void;
 }
@@ -155,7 +161,7 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
   /** The pull request this run owes a review draft for, if any. */
   const reviewTarget = (): number | undefined =>
     deps.reviewPullRequest ?? (reviewOnRead && readPulls.size === 1 ? [...readPulls][0] : undefined);
-  const reviewOwed = () => reviewTarget() !== undefined && !reviewShown && !deps.signal?.aborted;
+  const reviewOwed = () => !deps.readOnly && reviewTarget() !== undefined && !reviewShown && !deps.signal?.aborted;
   /** The model's last words before it was reminded to draft the review. */
   let beforeNudge: string | undefined;
 
@@ -215,6 +221,14 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
         if (call.name === getPullRequest.name && !read.error && typeof read.number === 'number') readPulls.add(read.number);
         continue;
       }
+      if (deps.readOnly) {
+        const error = 'Another change is waiting for the user\'s approval, so nothing else can change now. Ask them to approve or reject it first.';
+        const stepId = toolStepId(deps.runId, call.id);
+        emit({ type: 'STEP_STARTED', stepId, stepName: getToolSpec(call.name)?.label ?? call.name });
+        emit({ type: 'STEP_FINISHED', stepId, status: 'error', detail: 'Not while a change waits for approval' });
+        results.push({ callId: call.id, name: call.name, content: { error } });
+        continue;
+      }
       if (pending) {
         const error = 'Only one change can wait for approval at a time. Offer this one again after the user decides on the first.';
         results.push({ callId: call.id, name: call.name, content: { error } });
@@ -271,12 +285,19 @@ async function runTool(call: ToolCall, deps: AgentDeps): Promise<unknown> {
     return { error: message };
   };
 
-  if (!spec || !deps.executors[spec.name]) return fail(`Unknown tool "${call.name}".`);
+  if (!spec || (!deps.executors[spec.name] && spec.side !== 'client')) return fail(`Unknown tool "${call.name}".`);
   // Defence in depth: the loop routes these to prepareApproval, never here.
   if (needsApproval(spec.name)) return fail(`"${spec.name}" changes the repository and needs user approval.`);
 
   const parsed = spec.input.safeParse(dropNulls(call.args));
   if (!parsed.success) return fail(invalidInput(spec.name, parsed.error));
+
+  // Client tools only change what is on screen: the browser runs them (validated input only).
+  if (spec.side === 'client') {
+    emit({ type: 'CUSTOM', name: 'client_tool', value: { callId: call.id, name: spec.name, args: parsed.data } });
+    emit({ type: 'STEP_FINISHED', stepId, status: 'done', detail: clientDetail(spec.name, parsed.data) });
+    return { sentToApp: true, note: 'The app applies this on the user\'s screen. Say briefly what you did; do not repeat data.' };
+  }
 
   try {
     const out = await deps.executors[spec.name](parsed.data, deps.ctx);
@@ -437,6 +458,19 @@ function showCard(deps: AgentDeps, surfaceId: string, component: GateComponent, 
   if (!check.ok) return check.error;
   deps.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId, node } });
   return null;
+}
+
+/** The step detail for a client tool, e.g. "src/auth/login.js:12–18". */
+function clientDetail(name: string, args: unknown): string {
+  const a = args as Record<string, unknown>;
+  if (name === 'highlight_lines') return `${String(a['path'])}:${String(a['from'])}–${String(a['to'])}`.slice(0, 200);
+  if (name === 'navigate_to') return a['page'] === 'pull_request' ? `Pull request #${String(a['number'])}` : String(a['page']).replace('_', ' ');
+  if (name === 'apply_table_filter') {
+    if (a['clear']) return 'Filter cleared';
+    const parts = [...((a['labels'] as string[]) ?? []), a['state'], a['author']].filter(Boolean);
+    return parts.length ? parts.join(', ').slice(0, 200) : 'No filter';
+  }
+  return 'Done';
 }
 
 function invalidInput(tool: string, error: { issues: { path: PropertyKey[]; message: string }[] }): string {

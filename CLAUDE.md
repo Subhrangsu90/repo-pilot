@@ -15,7 +15,8 @@ Full design: [docs/project-documentation.md](docs/project-documentation.md).
 `@repopilot/shared` exports TypeScript source (no build step). The web app resolves it
 through a `paths` entry in `projects/web/tsconfig.json`; the server runs it through tsx.
 
-Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
+Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`, `npm run e2e`
+(Playwright against an `E2E_MODE` server: mock model, fake GitHub, no database).
 
 ## Database (Postgres in Docker + Drizzle)
 
@@ -51,7 +52,8 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - LLM: **Gemini Flash** (free tier) is the default; **Claude Haiku** optional; **Gemma via
   Ollama** for the local/private story. Selected by `LLM_PROVIDER` in `projects/server/.env`.
   Keep providers behind one interface so the switch is a config change.
-- GitHub: fine-grained PAT in `projects/server/.env` until week 4, then GitHub OAuth.
+- GitHub: OAuth App sign-in when `GITHUB_OAUTH_CLIENT_ID` + `_SECRET` + `SESSION_SECRET` are set
+  (week 4); otherwise dev mode, everyone acting as the fine-grained PAT's owner (`GITHUB_TOKEN`).
 - Routes render client-side (`RenderMode.Client`); the SSR server only serves the shell.
 - Theme: **Graphite by default**, Light as a toggle saved in localStorage (`repopilot-theme`),
   applied as `<html data-theme>`; index.html sets it before first paint.
@@ -224,9 +226,58 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       "Release v1.1.0", "Close issues #9, #10", "Reopen 4 issues", "Health report"; list questions
       keep the prompt line (it says more than "Open pull requests"). Not a model call, unlike doc
       §9b step 1.
-- [ ] Week 4 – client tools (demo step 4: "take me to the auth changes" scrolls/highlights diff
-      lines), recorded event-stream fixtures + mock agent, Playwright e2e, GitHub OAuth, deploy
-      (hosted Postgres).
+- [ ] Week 4 (branch `feat/week-4`, from `chore/week-3-wrap-up`).
+  - [x] Client tools (2026-11-12): `navigate_to`, `highlight_lines`, `apply_table_filter` in
+        `shared/src/tools.ts` with `side: 'client'` (risk read). The loop validates the input, streams
+        `CUSTOM client_tool` and tells the model the app applied it (no executor). Browser:
+        `AgentSession.runClientTool` → Router (`routeFor`), `ClientTools.requestHighlight` (DiffViewer
+        outlines the new-file lines, scrolls, claims it; unclaimed after 300 ms → "not on screen" note
+        in Ask), `filterTables` (pure, `agent-run.ts`: filters the latest surface containing the
+        IssueTable/PrList, also nested in the health report; keeps `base` for Clear; replays from
+        History; navigation/highlights do not replay). Side questions while a change waits:
+        `POST /api/runs` on a pending thread runs `agent/side.ts` (copy of the thread with the paused
+        call answered "not decided yet", read + client tools only, `readOnly` refuses changes in code);
+        the copy is discarded, the run is saved, `replayRuns` attaches the resumed run to the turn that
+        waited. Ask no longer locks the prompt box while a card waits (`locked` = busy only).
+        Verified live with Gemma: health report → "Only show bugs" filtered in place (needed examples
+        in the tool description); "Review pull request #15" pending → "Take me to where the rate
+        limit key is built" → `highlight_lines` src/auth/login.js:6–34; rejected, nothing posted.
+  - [x] Mock agent + fake GitHub + Playwright + recorded streams (2026-11-12): `E2E_MODE=1` forces
+        `LLM_PROVIDER=mock` (`llm/mock.ts`, scripts per demo prompt), an in-process `FakeGitHub`
+        (`testing/fake-github.ts`, demo data for `demo-owner/repopilot-demo`, records writes,
+        anything unmocked → 404) and no database, whatever `.env` says; adds
+        `GET /api/__test__/github-writes` and `POST /api/__test__/reset`. `npm run e2e` (root
+        `playwright.config.ts`, `e2e/demo.spec.ts`) starts the server on :3100 and `ng serve` on
+        :4300 with `proxy.e2e.json` (never the dev :3000/:4200): PR list, approve 2 of 3 → exactly
+        two PATCHes, reject → no writes, "only show bugs" filter + Clear, Issues page close, invalid /
+        XSS fallback. 6 passed. Recorded streams: `web/src/app/core/recorded/*.json` (real runs
+        exported from Postgres) replayed in `recorded-streams.spec.ts`. Note: `npm run typecheck`
+        does not check templates; `ng build` (or the e2e run) does.
+  - [x] GitHub OAuth, code complete (2026-11-12; needs a registered OAuth App to try for real):
+        `auth/index.ts` `createAuth()` → mode `oauth` (all three env vars set) or `token` (dev: acts as
+        the GITHUB_TOKEN owner, as before). `/api/auth/login` (state in a sealed cookie, scope
+        `GITHUB_OAUTH_SCOPE`, default `public_repo`) → GitHub → `/api/auth/callback` (state checked,
+        code exchanged server-side, `/user`) → sealed `rp_session` cookie (AES-256-GCM, httpOnly,
+        SameSite=Lax, Secure on https, 8 h; holds the token, never readable by the page) → `/ask`.
+        `/api/auth/me`, `POST /api/auth/logout`. An `onRequest` hook gives every `/api/*` request
+        its user (401 in OAuth mode without one; public: `/api/auth/*`, `/api/health`,
+        `/api/__test__/*`). `who(req)` → `{ login, ctx }`: all GitHub calls use that user's token.
+        Ownership: threads carry `owner` (new prompts, approvals and SSE of someone else's run →
+        404 / not_found); the store scopes sessions by `user_id` and the audit log by `approved_by`
+        (`recordAudit` takes `approver`). Existing rows keep working in dev mode (they carry the PAT
+        owner's login). Web: sign-in page `/signin` (`features/auth/sign-in.ts`, outside the Shell;
+        states: signed out, `?error=denied|state|exchange|expired`, `?signedOut=1`, already signed in,
+        dev mode, server unreachable). `requireSignIn` guard on the Shell route sends signed-out
+        visitors to `/signin?next=<page>`; `/api/auth/login?next=` keeps it in the sealed state cookie
+        and the callback returns there (`safeNext()`: in-app paths only, never `//host`, `/api/`,
+        `/signin`); failures redirect to `/signin?error=…`. `Auth.load()` (promise, shared), 401
+        interceptor → `expired` + `/signin?error=expired&next=<here>`. Login + Sign out in the nav
+        foot; Landing's Sign in buttons go to `/signin` when OAuth needs it. Lesson: read
+        `httpResource` values through `core/resource.ts` `valueOf()` (`.value()` throws in the error
+        state, which stopped the view and left the sign-in link without an href). Verified: dev mode unchanged on the live server;
+        OAuth mode with placeholder settings → every API 401, login redirect correct. Not done: token
+        revocation on sign-out, a GitHub App (fine-grained) instead of an OAuth App.
+  - [ ] Deploy (hosted Postgres): host not chosen yet.
 
 ## Agent server notes
 

@@ -2,7 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import type { SavedSession } from './api';
-import { AgentSession } from './agent-session';
+import { AgentSession, routeFor } from './agent-session';
 
 const SESSION = '44da5e15-42e9-4db4-ad73-2d8ed1b35654';
 const table = (numbers: number[]) => ({
@@ -74,5 +74,16 @@ describe('AgentSession refresh', () => {
     http.expectNone((r) => r.url.includes('/refresh'));
     session.reset();
     expect(session.freshness().size).toBe(0);
+  });
+});
+
+describe('routeFor (navigate_to)', () => {
+  it('maps pages to app routes and refuses anything else', () => {
+    expect(routeFor({ page: 'audit' })).toBe('/audit');
+    expect(routeFor({ page: 'pull_requests' })).toBe('/pulls');
+    expect(routeFor({ page: 'pull_request', number: 15 })).toBe('/pulls/15');
+    expect(routeFor({ page: 'pull_request' })).toBeNull();
+    expect(routeFor({ page: 'https://evil.example' })).toBeNull();
+    expect(routeFor({})).toBeNull();
   });
 });

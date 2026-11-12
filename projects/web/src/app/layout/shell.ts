@@ -5,6 +5,7 @@ import type { ModelOption } from '@repopilot/shared';
 import { filter, map } from 'rxjs';
 import { ModelChoice } from '../core/model-choice';
 import { ServerStatus } from '../core/server-status';
+import { Auth } from '../core/auth';
 import { REGISTRY } from '../genui/registry';
 import { GENUI_REGISTRY } from '../genui/registry-token';
 import { Theme } from '../core/theme';
@@ -114,6 +115,12 @@ const MODELS: { value: ModelOption; label: string }[] = [
             }
           </div>
         }
+        @if (auth.mode() === 'oauth' && auth.user(); as u) {
+          <div class="flex min-h-11 items-center justify-between gap-2 px-1">
+            <span class="min-w-0 truncate font-mono text-body-sm text-fg-muted"><span class="sr-only">Signed in as </span>{{ u.login }}</span>
+            <button type="button" class="btn btn-ghost shrink-0 px-3" (click)="auth.signOut()">Sign out</button>
+          </div>
+        }
         <button type="button" class="btn btn-ghost justify-start px-3" (click)="theme.toggle()">
           <app-icon [name]="theme.current() === 'graphite' ? 'sun' : 'moon'" />
           {{ theme.current() === 'graphite' ? 'Light theme' : 'Graphite theme' }}
@@ -130,6 +137,7 @@ export class Shell {
   protected readonly status = inject(ServerStatus);
   protected readonly model = inject(ModelChoice);
   protected readonly theme = inject(Theme);
+  protected readonly auth = inject(Auth);
   protected readonly nav = NAV;
   protected readonly models = MODELS;
 

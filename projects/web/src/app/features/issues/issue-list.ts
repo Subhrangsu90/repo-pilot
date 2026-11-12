@@ -1,4 +1,5 @@
 import { httpResource } from '@angular/common/http';
+import { valueOf } from '../../core/resource';
 import { Component, computed, effect, inject, linkedSignal, signal, untracked } from '@angular/core';
 import type { EmitFn, PropsOf, UiEvent, UiNode } from '@repopilot/shared';
 import { AgentSession } from '../../core/agent-session';
@@ -94,7 +95,7 @@ export function bulkPrompt(action: 'close' | 'reopen', numbers: number[]): strin
         </div>
       } @else if (table(); as node) {
         <app-genui-host [node]="node" [emit]="onEmit" />
-        @if (issues.value()?.truncated) {
+        @if (truncated()) {
           <p class="text-body-sm text-fg-muted">Showing the first 100 issues.</p>
         }
       }
@@ -153,17 +154,18 @@ export class IssueList {
   protected readonly issues = httpResource<IssuesResponse>(() => ({ url: '/api/issues', params: { state: this.state() } }));
 
   /** Every label on the loaded issues, for the filter chips. */
-  protected readonly labels = computed(() => [...new Set((this.issues.value()?.rows ?? []).flatMap((r) => r.labels))].sort());
+  protected readonly truncated = computed(() => valueOf(this.issues)?.truncated ?? false);
+  protected readonly labels = computed(() => [...new Set((valueOf(this.issues)?.rows ?? []).flatMap((r) => r.labels))].sort());
   /** Picked labels; an issue must have all of them. Cleared when the state changes. */
   protected readonly picked = linkedSignal<State, ReadonlySet<string>>({ source: this.state, computation: () => new Set() });
 
   private readonly rows = computed(() => {
     const picked = [...this.picked()];
-    return (this.issues.value()?.rows ?? []).filter((r) => picked.every((l) => r.labels.includes(l)));
+    return (valueOf(this.issues)?.rows ?? []).filter((r) => picked.every((l) => r.labels.includes(l)));
   });
 
   protected readonly table = computed<UiNode | null>(() => {
-    const res = this.issues.value();
+    const res = valueOf(this.issues);
     if (!res) return null;
     const label = STATES.find((s) => s.value === this.state())!.label;
     const filtered = this.picked().size ? ' with the picked labels' : '';

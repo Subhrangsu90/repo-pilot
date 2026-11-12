@@ -1,4 +1,5 @@
 import { httpResource } from '@angular/common/http';
+import { valueOf } from '../../core/resource';
 import { Component, computed, effect, inject, input, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { EmitFn } from '@repopilot/shared';
@@ -27,7 +28,7 @@ import { PrHeader, PrInfo } from '../../shared/ui/pr-header';
       @if (!valid()) {
         <p class="card border-danger p-4 text-body-sm" role="alert">"{{ number() }}" is not a pull request number.</p>
       } @else {
-        @if (pr.value(); as info) {
+        @if (prInfo(); as info) {
           <app-pr-header [pr]="info" [level]="1" />
         } @else if (pr.error()) {
           <p class="card border-danger p-4 text-body-sm" role="alert">Pull request #{{ number() }} could not be loaded.</p>
@@ -90,6 +91,7 @@ export class PullReview {
   protected readonly session = inject(AgentSession);
   protected readonly valid = computed(() => /^[1-9]\d{0,9}$/.test(this.number()));
   protected readonly pr = httpResource<PrInfo>(() => (this.valid() ? `/api/pulls/${this.number()}` : undefined));
+  protected readonly prInfo = computed(() => valueOf(this.pr));
   protected readonly turn = computed(() => this.session.turns().at(-1));
   protected readonly onEmit: EmitFn = this.session.handleUiEvent;
   protected readonly surfaces = visibleSurfaces;

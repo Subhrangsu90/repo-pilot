@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { refreshableSurfaces, refreshSurface } from '../agent/refresh';
 import type { Store } from '../store';
@@ -23,7 +23,8 @@ export function registerSessionRoutes(
     onDelete: (id: string) => void;
     /** Read tools for Refresh (re-run without the model). */
     executors: Record<string, Executor<any>>;
-    ctx: ToolContext;
+    /** The signed-in user (auth/index.ts) and the tool context acting as them. Sessions are per user. */
+    who: (req: FastifyRequest) => { login: string; ctx: ToolContext };
   },
 ) {
   const off = (reply: FastifyReply) =>
@@ -33,14 +34,14 @@ export function registerSessionRoutes(
     if (!store) return off(reply);
     const query = ListQuery.safeParse(req.query);
     if (!query.success) return reply.code(400).send({ error: 'Use ?q=text&filter=all|waiting|changes|read.' });
-    return { items: await store.listSessions(query.data) };
+    return { items: await store.listSessions({ ...query.data, userId: opts.who(req).login }) };
   });
 
   app.get('/api/sessions/:id', async (req, reply) => {
     if (!store) return off(reply);
     const params = Id.safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: 'Not a session id.' });
-    const session = await store.getSession(params.data.id);
+    const session = await store.getSession(params.data.id, opts.who(req).login);
     if (!session) return reply.code(404).send({ error: 'Session not found.' });
     const thread = await store.loadThread(params.data.id);
     const refreshable = [...refreshableSurfaces(session.runs, thread?.messages ?? [])].map(([surfaceId, s]) => ({
@@ -55,12 +56,13 @@ export function registerSessionRoutes(
     if (!store) return off(reply);
     const params = RefreshParams.safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: 'Not a session or surface id.' });
-    const [session, thread] = await Promise.all([store.getSession(params.data.id), store.loadThread(params.data.id)]);
+    const { login, ctx } = opts.who(req);
+    const [session, thread] = await Promise.all([store.getSession(params.data.id, login), store.loadThread(params.data.id)]);
     if (!session || !thread) return reply.code(404).send({ error: 'Session not found.' });
     const target = refreshableSurfaces(session.runs, thread.messages).get(params.data.surfaceId);
     if (!target) return reply.code(404).send({ error: 'This result cannot be refreshed.' });
     try {
-      const node = await refreshSurface(target.call, opts.executors, opts.ctx);
+      const node = await refreshSurface(target.call, opts.executors, ctx);
       return { surfaceId: params.data.surfaceId, node, refreshedAt: new Date().toISOString() };
     } catch (err) {
       req.log.warn({ err: (err as Error).message }, 'refresh failed');
@@ -74,14 +76,14 @@ export function registerSessionRoutes(
     const params = Id.safeParse(req.params);
     const body = Rename.safeParse(req.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Send { title: string } (1-80 characters).' });
-    return (await store.renameSession(params.data.id, body.data.title)) ? { ok: true } : reply.code(404).send({ error: 'Session not found.' });
+    return (await store.renameSession(params.data.id, body.data.title, opts.who(req).login)) ? { ok: true } : reply.code(404).send({ error: 'Session not found.' });
   });
 
   app.delete('/api/sessions/:id', async (req, reply) => {
     if (!store) return off(reply);
     const params = Id.safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: 'Not a session id.' });
-    if (!(await store.deleteSession(params.data.id))) return reply.code(404).send({ error: 'Session not found.' });
+    if (!(await store.deleteSession(params.data.id, opts.who(req).login))) return reply.code(404).send({ error: 'Session not found.' });
     opts.onDelete(params.data.id);
     return reply.code(204).send();
   });

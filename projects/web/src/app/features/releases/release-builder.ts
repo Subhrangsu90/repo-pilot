@@ -1,4 +1,5 @@
 import { Component, computed, inject, linkedSignal } from '@angular/core';
+import { valueOf } from '../../core/resource';
 import { EmitFn } from '@repopilot/shared';
 import { AgentSession } from '../../core/agent-session';
 import { ServerStatus } from '../../core/server-status';
@@ -97,7 +98,7 @@ export class ReleaseBuilder {
 
   /** Starts as "Draft release v1.1.0 from everything since v1.0.0", from the latest release. */
   protected readonly draft = linkedSignal(() => {
-    const latest = this.status.overview.value()?.latestRelease;
+    const latest = valueOf(this.status.overview)?.latestRelease;
     return latest ? `Draft release ${nextMinor(latest)} from everything since ${latest}` : 'Draft the first release';
   });
   protected readonly turn = computed(() => this.session.turns().at(-1));

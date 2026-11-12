@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { requireSignIn } from './core/auth';
 
 export const routes: Routes = [
   {
@@ -8,7 +9,14 @@ export const routes: Routes = [
     loadComponent: () => import('./features/landing/landing').then((m) => m.Landing),
   },
   {
+    // Outside the app layout; the app pages send signed-out visitors here (OAuth mode).
+    path: 'signin',
+    title: 'Sign in · RepoPilot',
+    loadComponent: () => import('./features/auth/sign-in').then((m) => m.SignIn),
+  },
+  {
     path: '',
+    canActivate: [requireSignIn],
     loadComponent: () => import('./layout/shell').then((m) => m.Shell),
     children: [
       {

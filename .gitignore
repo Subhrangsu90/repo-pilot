@@ -51,3 +51,8 @@ Thumbs.db
 # agents
 .agents
 .claude
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/

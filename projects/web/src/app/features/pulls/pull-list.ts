@@ -1,5 +1,6 @@
 import { httpResource } from '@angular/common/http';
-import { Component } from '@angular/core';
+import { valueOf } from '../../core/resource';
+import { Component, computed } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import type { PropsOf } from '@repopilot/shared';
 import { GenUiHost } from '../../genui/genui-host';
@@ -40,7 +41,7 @@ interface PullsResponse {
         </div>
       } @else {
         <ul class="flex flex-col gap-2">
-          @for (pr of pulls.value()?.items ?? []; track pr.number) {
+          @for (pr of items(); track pr.number) {
             <li class="flex flex-wrap items-center gap-3">
               <app-genui-host class="min-w-0 flex-[1_1_480px]" [node]="{ component: 'PrCard', props: pr }" />
               <a class="btn" [routerLink]="['/pulls', pr.number]">Review #{{ pr.number }}</a>
@@ -55,4 +56,5 @@ interface PullsResponse {
 })
 export class PullList {
   protected readonly pulls = httpResource<PullsResponse>(() => '/api/pulls');
+  protected readonly items = computed(() => valueOf(this.pulls)?.items ?? []);
 }

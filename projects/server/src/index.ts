@@ -1,10 +1,12 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { componentNames, type AgentEvent, type ModelOption } from '@repopilot/shared';
 import { config, type Config } from './config';
+import { createAuth } from './auth';
 import { trackFollowups } from './agent/followups';
 import { resumeAgent, runAgent, type AgentDeps } from './agent/loop';
 import { buildSystemPrompt, buildToolDefs } from './agent/prompt';
+import { readOnlyTools, sideHistory } from './agent/side';
 import {
   dropThread,
   findPendingByRun,
@@ -12,6 +14,7 @@ import {
   isTerminal,
   onRunFinished,
   restoreThread,
+  runOwner,
   startRun,
   subscribe,
   ThreadBusyError,
@@ -23,13 +26,47 @@ import { Store } from './store';
 import { GitHub } from './github/client';
 import { createProvider } from './llm';
 import { fetchPullRequest } from './github/pulls';
+import { FakeGitHub } from './testing/fake-github';
 import { actions } from './tools/actions';
 import { executors, resolveRepo, runListIssues, runListPullRequests, type ToolContext } from './tools/read-tools';
 
 const app = Fastify({ logger: { level: 'info' } });
-const github = new GitHub(config.GITHUB_TOKEN ?? '');
-const toolCtx: ToolContext = { github, allowlist: config.GITHUB_REPO_ALLOWLIST };
+// E2E_MODE: the in-process fake (testing/fake-github.ts); it has the same rest / graphql / login surface.
+const fake = config.E2E_MODE ? new FakeGitHub() : null;
+const github = fake ? (fake as unknown as GitHub) : new GitHub(config.GITHUB_TOKEN ?? '');
+if (fake) {
+  app.log.warn('E2E_MODE: fake GitHub, mock model, no database. For end-to-end tests only.');
+  /** What the fake GitHub was asked to write, for Playwright to assert on. */
+  app.get('/api/__test__/github-writes', async () => ({ writes: fake.writes }));
+  /** Back to the seeded demo data between tests. */
+  app.post('/api/__test__/reset', async () => {
+    fake.reset();
+    return { ok: true };
+  });
+}
 const toolDefs = buildToolDefs();
+
+/** Sign in with GitHub (OAuth mode), or everyone acts as GITHUB_TOKEN's owner (dev mode). */
+const auth = createAuth({
+  clientId: config.GITHUB_OAUTH_CLIENT_ID,
+  clientSecret: config.GITHUB_OAUTH_CLIENT_SECRET,
+  sessionSecret: config.SESSION_SECRET,
+  appUrl: config.APP_URL,
+  scope: config.GITHUB_OAUTH_SCOPE,
+  tokenGithub: github,
+});
+auth.register(app);
+app.log.info(`auth: ${auth.mode === 'oauth' ? 'Sign in with GitHub' : 'dev mode, acting as the GITHUB_TOKEN owner'}`);
+
+/** The user of a request and a tool context that acts with their GitHub access. */
+function who(req: FastifyRequest): { login: string; ctx: ToolContext } {
+  const user = auth.userOf(req);
+  return { login: user.login, ctx: { github: user.github, allowlist: config.GITHUB_REPO_ALLOWLIST } };
+}
+
+/** GitHub can be called: a signed-in user's token (OAuth) or GITHUB_TOKEN (dev). */
+const githubReady = auth.mode === 'oauth' || Boolean(config.GITHUB_TOKEN);
+const NO_GITHUB = 'GITHUB_TOKEN is not set in projects/server/.env (or configure GitHub OAuth).';
 
 /** Postgres (sessions, runs, audit log). Without it the server still runs, in memory only. */
 async function connectStore(): Promise<Store | null> {
@@ -40,7 +77,7 @@ async function connectStore(): Promise<Store | null> {
   try {
     const { db } = await openDb(config.DATABASE_URL);
     app.log.info('Postgres connected; migrations applied.');
-    return new Store(db, { login: () => github.login(), repo: config.GITHUB_REPO_ALLOWLIST[0] ?? '' }, (msg, err) =>
+    return new Store(db, { repo: config.GITHUB_REPO_ALLOWLIST[0] ?? '' }, (msg, err) =>
       app.log.error({ err: (err as Error).message }, msg),
     );
   } catch (err) {
@@ -59,8 +96,8 @@ async function ensureThread(id: string | undefined) {
   if (data) restoreThread(data);
 }
 
-registerSessionRoutes(app, store, { onDelete: dropThread, executors, ctx: toolCtx });
-registerAuditRoutes(app, store, toolCtx);
+registerSessionRoutes(app, store, { onDelete: dropThread, executors, who });
+registerAuditRoutes(app, store, who);
 
 /** Liveness plus a quick view of what is configured (never the secrets). */
 app.get('/api/health', async () => ({
@@ -75,6 +112,7 @@ app.get('/api/health', async () => ({
     },
   },
   github: { tokenConfigured: Boolean(config.GITHUB_TOKEN), repos: config.GITHUB_REPO_ALLOWLIST },
+  auth: auth.mode,
   catalog: componentNames,
 }));
 
@@ -102,10 +140,10 @@ interface OverviewData {
  */
 app.get('/api/overview', async (req, reply) => {
   const full = config.GITHUB_REPO_ALLOWLIST[0];
-  if (!config.GITHUB_TOKEN || !full) return reply.code(503).send({ error: 'GITHUB_TOKEN or GITHUB_REPO_ALLOWLIST is not set.' });
+  if (!githubReady || !full) return reply.code(503).send({ error: 'GitHub access or GITHUB_REPO_ALLOWLIST is not set.' });
   const [owner, name] = full.split('/');
   try {
-    const d = await github.graphql<OverviewData>(OVERVIEW_QUERY, { owner, name });
+    const d = await who(req).ctx.github.graphql<OverviewData>(OVERVIEW_QUERY, { owner, name });
     return {
       repo: full,
       openPullRequests: d.repository?.pullRequests.totalCount ?? null,
@@ -122,9 +160,9 @@ app.get('/api/overview', async (req, reply) => {
 
 /** The Pull requests page: open PRs of the default repo, as PrCard props. */
 app.get('/api/pulls', async (req, reply) => {
-  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
   try {
-    const out = await runListPullRequests({ state: 'open', limit: 50 }, toolCtx);
+    const out = await runListPullRequests({ state: 'open', limit: 50 }, who(req).ctx);
     return { repo: config.GITHUB_REPO_ALLOWLIST[0], items: (out.ui?.props as { items: unknown[] }).items };
   } catch (err) {
     req.log.warn({ err: (err as Error).message }, 'pull list failed');
@@ -143,9 +181,9 @@ const ISSUE_LIMIT = 100;
 app.get('/api/issues', async (req, reply) => {
   const query = IssuesQuery.safeParse(req.query);
   if (!query.success) return reply.code(400).send({ error: 'state must be open, closed or all.' });
-  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
   try {
-    const out = await runListIssues({ state: query.data.state, labels: [], limit: ISSUE_LIMIT }, toolCtx);
+    const out = await runListIssues({ state: query.data.state, labels: [], limit: ISSUE_LIMIT }, who(req).ctx);
     const rows = (out.ui?.props as { rows: unknown[] }).rows;
     return { repo: config.GITHUB_REPO_ALLOWLIST[0], rows, truncated: rows.length === ISSUE_LIMIT };
   } catch (err) {
@@ -158,9 +196,10 @@ app.get('/api/issues', async (req, reply) => {
 app.get<{ Params: { number: string } }>('/api/pulls/:number', async (req, reply) => {
   const number = Number(req.params.number);
   if (!Number.isInteger(number) || number < 1) return reply.code(400).send({ error: 'Not a pull request number.' });
-  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set.' });
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
   try {
-    const pr = await fetchPullRequest(toolCtx, resolveRepo(undefined, toolCtx), number, { files: false });
+    const { ctx } = who(req);
+    const pr = await fetchPullRequest(ctx, resolveRepo(undefined, ctx), number, { files: false });
     if (!pr) return reply.code(404).send({ error: `Pull request #${number} was not found.` });
     return pr.info;
   } catch (err) {
@@ -178,12 +217,14 @@ const StartRunBody = z.object({
 
 /** The UI's Cloud / Local switch. Cloud keeps a configured cloud provider, else Gemini. */
 function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
+  if (config.LLM_PROVIDER === 'mock') return 'mock'; // E2E: the Cloud / Local switch never reaches a real model
   if (model === 'local') return 'ollama';
   if (model === 'cloud') return config.LLM_PROVIDER === 'ollama' ? 'gemini' : config.LLM_PROVIDER;
   return config.LLM_PROVIDER;
 }
 
 function agentDeps(
+  user: { login: string; ctx: ToolContext },
   threadId: string,
   model: ModelOption | undefined,
   emit: (e: AgentEvent) => void,
@@ -199,12 +240,13 @@ function agentDeps(
     tools: toolDefs,
     executors,
     actions,
-    ctx: toolCtx,
+    ctx: user.ctx,
     emit,
     runId: run.id,
     signal: run.signal,
     reviewPullRequest,
-    onExecuted: store ? async (change) => void (await store.recordAudit(threadId, change)) : undefined,
+    // The audit log records who approved each change.
+    onExecuted: store ? async (change) => void (await store.recordAudit(threadId, { ...change, approver: user.login })) : undefined,
   };
 }
 
@@ -213,10 +255,25 @@ app.post('/api/runs', async (req, reply) => {
   if (!parsed.success) {
     return reply.code(400).send({ error: "Send { prompt: string, threadId?: uuid, model?: 'cloud' | 'local' }." });
   }
-  if (!config.GITHUB_TOKEN) return reply.code(503).send({ error: 'GITHUB_TOKEN is not set in projects/server/.env.' });
+  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
+  const user = who(req);
   await ensureThread(parsed.data.threadId);
-  if (getThread(parsed.data.threadId)?.pending) {
-    return reply.code(409).send({ error: 'A change is waiting for your approval. Approve or reject it first.' });
+  const existing = getThread(parsed.data.threadId);
+  // Only the person who started a conversation may continue it.
+  if (existing?.owner && existing.owner !== user.login) return reply.code(404).send({ error: 'Conversation not found.' });
+  const waiting = existing?.pending;
+  if (waiting) {
+    // A side question: read and client tools only, on a copy of the conversation (agent/side.ts).
+    try {
+      const started = startRun(parsed.data.threadId, async (thread, emit, run) => {
+        const deps = agentDeps(user, thread.id, thread.model, emit, run);
+        await runAgent(sideHistory(thread.messages, waiting), parsed.data.prompt, { ...deps, tools: readOnlyTools(deps.tools), actions: {}, readOnly: true });
+      }, { prompt: parsed.data.prompt, owner: user.login });
+      return reply.code(202).send(started);
+    } catch (err) {
+      if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
+      throw err;
+    }
   }
 
   try {
@@ -225,7 +282,7 @@ app.post('/api/runs', async (req, reply) => {
       thread.model = parsed.data.model;
       const followups = trackFollowups(emit);
       try {
-        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(thread.id, thread.model, followups.emit, run, parsed.data.reviewPullRequest));
+        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(user, thread.id, thread.model, followups.emit, run, parsed.data.reviewPullRequest));
         if (outcome.status === 'awaiting-approval') thread.pending = { ...outcome.pending, prompt: parsed.data.prompt };
         else followups.finish();
       } catch (err) {
@@ -234,7 +291,7 @@ app.post('/api/runs', async (req, reply) => {
         req.log.warn({ err: (err as Error).message }, 'run failed');
         throw err;
       }
-    }, { prompt: parsed.data.prompt });
+    }, { prompt: parsed.data.prompt, owner: user.login });
     return reply.code(202).send(started);
   } catch (err) {
     if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
@@ -254,8 +311,7 @@ const ActionBody = z.object({
  * The user's answer to an ApprovalCard. Starts a new run on the same thread
  * that carries out the decision and lets the model summarise it; the client
  * streams it with GET /api/runs/:newRunId/events. Each approval can be answered
- * once. (Run ids are random UUIDs and the body must be JSON; owner checks
- * arrive with OAuth in week 4.)
+ * once, and only by the person who started the conversation.
  */
 app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply) => {
   const parsed = ActionBody.safeParse(req.body);
@@ -269,8 +325,9 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
     await ensureThread((await store.findSessionPendingOnRun(req.params.id).catch(() => null)) ?? undefined);
     thread = findPendingByRun(req.params.id);
   }
+  const user = who(req);
   const pending = thread?.pending;
-  if (!thread || !pending || pending.callId !== toolCallId) {
+  if (!thread || !pending || pending.callId !== toolCallId || (thread.owner && thread.owner !== user.login)) {
     return reply.code(404).send({ error: 'No approval is waiting for this run. It may have been answered already.' });
   }
   const approve = decision === 'approve';
@@ -282,7 +339,7 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply)
   try {
     const started = startRun(thread.id, async (t, emit, run) => {
       const followups = trackFollowups(emit);
-      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(t.id, t.model, followups.emit, run));
+      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(user, t.id, t.model, followups.emit, run));
       if (outcome.status === 'awaiting-approval') t.pending = { ...outcome.pending, prompt: pending.prompt };
       else followups.finish();
     });
@@ -319,7 +376,9 @@ app.get<{ Params: { id: string } }>('/api/runs/:id/events', (req, reply) => {
   }
   req.raw.on('close', close);
 
-  unsubscribe = subscribe(req.params.id, send);
+  // Only the conversation's owner may watch its runs.
+  const owner = runOwner(req.params.id);
+  unsubscribe = owner && owner !== who(req).login ? null : subscribe(req.params.id, send);
   if (!unsubscribe) {
     send({ type: 'RUN_ERROR', message: 'Unknown or expired run.', code: 'not_found' });
   }

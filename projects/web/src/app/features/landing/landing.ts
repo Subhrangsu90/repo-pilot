@@ -1,6 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { Theme } from '../../core/theme';
+import { Auth } from '../../core/auth';
 import { Icon } from '../../shared/ui/icon';
 import { Logo } from '../../shared/ui/logo';
 
@@ -71,7 +72,11 @@ const HOW = [
             <app-icon [name]="theme.current() === 'graphite' ? 'sun' : 'moon'" />
           </button>
           <!-- Goes straight to Ask until GitHub sign-in exists (week 4). -->
-          <a routerLink="/ask" class="btn">Sign in</a>
+          @if (auth.needsSignIn()) {
+            <a routerLink="/signin" class="btn">Sign in</a>
+          } @else {
+            <a routerLink="/ask" class="btn">Sign in</a>
+          }
         </nav>
       </header>
 
@@ -113,7 +118,12 @@ const HOW = [
             </form>
 
             <div class="flex flex-wrap items-center gap-3">
-              <a routerLink="/ask" class="btn btn-primary">Sign in with GitHub</a>
+              @if (auth.needsSignIn()) {
+                <!-- OAuth mode, signed out: the sign-in page. -->
+                <a routerLink="/signin" class="btn btn-primary">Sign in with GitHub</a>
+              } @else {
+                <a routerLink="/ask" class="btn btn-primary">Sign in with GitHub</a>
+              }
               <a routerLink="/ask" [queryParams]="{ q: approvalPrompt }" class="btn">See an approval flow</a>
             </div>
             <p class="text-body-sm text-fg-faint">Your token stays on the server. Every change waits for your approval.</p>
@@ -219,6 +229,11 @@ const HOW = [
   `,
 })
 export class Landing {
+  protected readonly auth = inject(Auth);
+
+  constructor() {
+    void this.auth.load();
+  }
   private readonly router = inject(Router);
   protected readonly theme = inject(Theme);
   protected readonly approvalPrompt = APPROVAL_PROMPT;
@@ -239,3 +254,4 @@ export class Landing {
     if (q) void this.router.navigate(['/ask'], { queryParams: { q } });
   }
 }
+

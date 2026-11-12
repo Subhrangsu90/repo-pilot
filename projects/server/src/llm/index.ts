@@ -1,5 +1,6 @@
 import type { Config } from '../config';
 import { createGemini } from './gemini';
+import { createMock } from './mock';
 import { createOllama } from './ollama';
 import { LlmError, LlmProvider, LlmReply, LlmRequest } from './types';
 
@@ -39,6 +40,8 @@ export function createProvider(config: Config, onFallback?: (error: LlmError) =>
     }
     case 'ollama':
       return createOllama(config.OLLAMA_URL, config.OLLAMA_MODEL, config.OLLAMA_NUM_CTX);
+    case 'mock':
+      return createMock();
     case 'claude':
       // Added once an ANTHROPIC_API_KEY is available to test against.
       throw new LlmError('The Claude provider is not implemented yet; use gemini or ollama.', false);

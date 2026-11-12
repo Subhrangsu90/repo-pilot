@@ -1,4 +1,4 @@
-import { and, desc, eq, exists, ilike, isNotNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, ilike, isNotNull, or, sql, type SQL } from 'drizzle-orm';
 import type { AgentEvent } from '@repopilot/shared';
 import type { Db } from './db/client';
 import { auditEntries, runs, sessions } from './db/schema';
@@ -39,7 +39,8 @@ export function lastText(events: AgentEvent[]): string {
 export class Store {
   constructor(
     private readonly db: Db,
-    private readonly who: { login: () => Promise<string>; repo: string },
+    /** The default repository, recorded on each session. Users come with each call (auth/index.ts). */
+    private readonly who: { repo: string },
     private readonly log: (msg: string, err: unknown) => void,
   ) {}
 
@@ -54,7 +55,8 @@ export class Store {
       const waiting = thread.pending?.runId === run.id;
       const status = last?.type === 'RUN_ERROR' ? 'error' : waiting ? 'awaiting-approval' : 'done';
       const now = new Date();
-      const userId = await this.who.login();
+      // The signed-in user who started the conversation (or the GITHUB_TOKEN owner in dev mode).
+      const userId = thread.owner ?? 'unknown';
       await this.db.transaction(async (tx) => {
         await tx
           .insert(sessions)
@@ -87,7 +89,7 @@ export class Store {
   }
 
   /** A conversation to put back in memory, e.g. after a server restart. */
-  async loadThread(id: string): Promise<Pick<Thread, 'id' | 'messages' | 'model' | 'pending'> | null> {
+  async loadThread(id: string): Promise<Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner'> | null> {
     const row = await this.db.query.sessions.findFirst({ where: eq(sessions.id, id) });
     if (!row) return null;
     return {
@@ -95,6 +97,7 @@ export class Store {
       messages: row.messages as ChatMessage[],
       model: (row.model as Thread['model']) ?? undefined,
       pending: (row.pending as PendingApproval | null) ?? undefined,
+      owner: row.userId,
     };
   }
 
@@ -107,8 +110,8 @@ export class Store {
     return row?.id ?? null;
   }
 
-  async listSessions(opts: { q?: string; filter: SessionFilter; limit?: number }) {
-    const conditions = [];
+  async listSessions(opts: { userId: string; q?: string; filter: SessionFilter; limit?: number }) {
+    const conditions: (SQL | undefined)[] = [eq(sessions.userId, opts.userId)];
     if (opts.q) {
       const like = `%${opts.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       conditions.push(
@@ -131,7 +134,7 @@ export class Store {
         madeChanges: sql<boolean>`${changed}`,
       })
       .from(sessions)
-      .where(conditions.length ? and(...conditions) : undefined)
+      .where(and(...conditions))
       .orderBy(desc(sessions.updatedAt))
       .limit(opts.limit ?? 100);
 
@@ -155,10 +158,10 @@ export class Store {
     return rows.map((s, i) => ({ ...s, ...details[i] }));
   }
 
-  async getSession(id: string) {
+  async getSession(id: string, userId: string) {
     const session = await this.db.query.sessions.findFirst({
       columns: { id: true, title: true, status: true, repo: true, createdAt: true, updatedAt: true },
-      where: eq(sessions.id, id),
+      where: and(eq(sessions.id, id), eq(sessions.userId, userId)),
     });
     if (!session) return null;
     const r = await this.db
@@ -169,14 +172,14 @@ export class Store {
     return { ...session, runs: r };
   }
 
-  async renameSession(id: string, title: string): Promise<boolean> {
-    const r = await this.db.update(sessions).set({ title, updatedAt: new Date() }).where(eq(sessions.id, id)).returning({ id: sessions.id });
+  async renameSession(id: string, title: string, userId: string): Promise<boolean> {
+    const r = await this.db.update(sessions).set({ title, updatedAt: new Date() }).where(and(eq(sessions.id, id), eq(sessions.userId, userId))).returning({ id: sessions.id });
     return r.length > 0;
   }
 
   /** Deletes the session and its runs; its audit entries stay (session link cleared). */
-  async deleteSession(id: string): Promise<boolean> {
-    const r = await this.db.delete(sessions).where(eq(sessions.id, id)).returning({ id: sessions.id });
+  async deleteSession(id: string, userId: string): Promise<boolean> {
+    const r = await this.db.delete(sessions).where(and(eq(sessions.id, id), eq(sessions.userId, userId))).returning({ id: sessions.id });
     return r.length > 0;
   }
 
@@ -184,12 +187,12 @@ export class Store {
   // Audit log
   // -------------------------------------------------------------------------
 
-  async recordAudit(sessionId: string, change: ExecutedChange): Promise<string | null> {
+  async recordAudit(sessionId: string, change: ExecutedChange & { approver: string }): Promise<string | null> {
     try {
       // The session row may not exist yet (it is saved when the run ends); create a stub so the link holds.
       await this.db
         .insert(sessions)
-        .values({ id: sessionId, userId: await this.who.login(), repo: this.who.repo, title: titleFrom(change.prompt ?? change.summary) })
+        .values({ id: sessionId, userId: change.approver, repo: this.who.repo, title: titleFrom(change.prompt ?? change.summary) })
         .onConflictDoNothing();
       const [row] = await this.db
         .insert(auditEntries)
@@ -203,7 +206,7 @@ export class Store {
           input: change.edits === undefined ? change.input : { ...(change.input as object), edits: change.edits },
           approvedIds: change.approvedIds,
           keptByUser: change.keptByUser,
-          approvedBy: await this.who.login(),
+          approvedBy: change.approver,
           ok: change.ok,
           result: change.result,
           response: change.response ?? null,
@@ -217,8 +220,9 @@ export class Store {
     }
   }
 
-  async listAudit(filter: AuditFilter, limit = 100) {
-    const where =
+  /** The changes this user approved. */
+  async listAudit(filter: AuditFilter, userId: string, limit = 100) {
+    const byFilter =
       filter === 'write'
         ? eq(auditEntries.risk, 'write')
         : filter === 'destructive'
@@ -226,12 +230,13 @@ export class Store {
           : filter === 'undone'
             ? isNotNull(auditEntries.undoneAt)
             : undefined;
+    const where = byFilter ? and(eq(auditEntries.approvedBy, userId), byFilter) : eq(auditEntries.approvedBy, userId);
     const rows = await this.db.select().from(auditEntries).where(where).orderBy(desc(auditEntries.createdAt)).limit(limit);
     return rows.map(present);
   }
 
-  async getAudit(seq: number) {
-    const row = await this.db.query.auditEntries.findFirst({ where: eq(auditEntries.seq, seq) });
+  async getAudit(seq: number, userId: string) {
+    const row = await this.db.query.auditEntries.findFirst({ where: and(eq(auditEntries.seq, seq), eq(auditEntries.approvedBy, userId)) });
     return row ? present(row) : null;
   }
 

@@ -16,7 +16,8 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
  */
 const ConfigSchema = z.object({
   PORT: z.coerce.number().int().default(3000),
-  LLM_PROVIDER: z.enum(['gemini', 'claude', 'ollama']).default('gemini'),
+  // mock: scripted replies for end-to-end tests (llm/mock.ts), no model at all.
+  LLM_PROVIDER: z.enum(['gemini', 'claude', 'ollama', 'mock']).default('gemini'),
 
   GEMINI_API_KEY: z.string().optional(),
   // Newest Flash models (3.7, 3.8) were overloaded on the free tier when tested on
@@ -37,6 +38,17 @@ const ConfigSchema = z.object({
   DATABASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
 
   GITHUB_TOKEN: z.string().optional(),
+  // "Sign in with GitHub" (auth/index.ts). All three set → OAuth mode: each user acts with their own
+  // token, kept in a sealed httpOnly cookie. Unset → dev mode: everyone acts as GITHUB_TOKEN's owner.
+  GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().optional(),
+  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters').optional(),
+  // OAuth App scopes: public_repo covers issues, reviews and releases on public repositories.
+  GITHUB_OAUTH_SCOPE: z.string().default('public_repo'),
+  // Where the browser opens the app; the OAuth callback URL is APP_URL/api/auth/callback.
+  APP_URL: z.url().default('http://localhost:4200').transform((u) => u.replace(/\/+$/, '')),
+  // End-to-end tests only (see below). Never set it for real use.
+  E2E_MODE: z.enum(['0', '1']).default('0').transform((v) => v === '1'),
   GITHUB_REPO_ALLOWLIST: z
     .string()
     .default('')
@@ -51,3 +63,22 @@ const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 
 export const config: Config = ConfigSchema.parse(process.env);
+
+/** The fake repository E2E_MODE serves (testing/fake-github.ts). */
+export const E2E_REPO = 'demo-owner/repopilot-demo';
+
+/**
+ * E2E_MODE=1 (Playwright): an in-process fake GitHub, the scripted mock model and
+ * no database, whatever .env says, so a test run can never reach the real
+ * GitHub API, a real model or the dev database. Adds /api/__test__ endpoints.
+ */
+if (config.E2E_MODE) {
+  Object.assign(config, {
+    LLM_PROVIDER: 'mock',
+    GITHUB_TOKEN: 'e2e',
+    GITHUB_REPO_ALLOWLIST: [E2E_REPO],
+    DATABASE_URL: undefined,
+    GITHUB_OAUTH_CLIENT_ID: undefined,
+    GITHUB_OAUTH_CLIENT_SECRET: undefined,
+  });
+}

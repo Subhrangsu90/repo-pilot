@@ -1,4 +1,5 @@
 import { HttpClient, HttpErrorResponse, httpResource } from '@angular/common/http';
+import { valueOf } from '../../core/resource';
 import { Component, computed, ElementRef, inject, linkedSignal, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
@@ -185,7 +186,7 @@ export class AuditLog {
   protected readonly filters = FILTERS;
   protected readonly filter = signal<Filter>('all');
   protected readonly entries = httpResource<{ items: AuditEntry[] }>(() => ({ url: '/api/audit', params: { filter: this.filter() } }));
-  protected readonly list = computed(() => this.entries.value()?.items ?? []);
+  protected readonly list = computed(() => valueOf(this.entries)?.items ?? []);
   protected readonly selectedId = linkedSignal<AuditEntry[], string | null>({
     source: this.list,
     computation: (list, prev) => (prev && list.some((e) => e.id === prev.value) ? prev.value : null),

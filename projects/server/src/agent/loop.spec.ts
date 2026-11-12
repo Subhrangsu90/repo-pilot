@@ -235,6 +235,52 @@ const cards = (events: AgentEvent[]) =>
     .filter((e) => e.name === 'ui' && e.value.node.component === 'ApprovalCard')
     .map((e) => (e.value as { node: { props: Record<string, unknown> } }).node.props);
 
+describe('client tools', () => {
+  it('validates the input and hands the call to the browser, without an executor', async () => {
+    const model = scripted(
+      { toolCalls: [{ id: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }] },
+      { text: 'The rate limit is set on lines 12–18.' },
+    );
+    const { run, events } = setup(model);
+    await run('take me to the auth changes');
+
+    const sent = ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool');
+    expect(sent.map((e) => e.value)).toEqual([{ callId: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }]);
+    expect(ofType(events, 'STEP_FINISHED').find((e) => e.stepId.includes('h1'))).toMatchObject({ status: 'done', detail: 'src/auth/login.js:12–18' });
+    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', results: [{ content: { sentToApp: true } }] });
+  });
+
+  it('never sends invalid client tool input to the browser', async () => {
+    const model = scripted({ toolCalls: [{ id: 'n1', name: 'navigate_to', args: { page: 'pull_request' } }] }, { text: 'Sorry.' });
+    const { run, events } = setup(model);
+    await run('open the PR');
+    expect(ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool')).toEqual([]);
+    expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('needs a number');
+  });
+});
+
+describe('side questions while a change waits (readOnly)', () => {
+  it('refuses any change in code, without a dry run', async () => {
+    const { tool, calls } = fakeAction();
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'It has to wait.' });
+    const { run, events } = setup(model, { actions: { bulk_update_issues: tool }, readOnly: true });
+
+    expect(await run('also close #118')).toEqual({ status: 'done' });
+    expect(calls.plan).toBe(0);
+    expect(cards(events)).toEqual([]);
+    expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('Another change is waiting');
+  });
+
+  it('owes no review draft in a side question', async () => {
+    const model = scripted({ text: 'Lines 12–18.' });
+    const { tool, calls } = fakeAction();
+    const { run } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16, readOnly: true });
+    expect(await run('Review where the key is built')).toEqual({ status: 'done' });
+    expect(calls.plan).toBe(0);
+    expect(model.requests).toHaveLength(1);
+  });
+});
+
 describe('approval gate', () => {
   it('pauses a destructive call on an approval card without changing anything', async () => {
     const model = scripted({ text: 'Here is what would change.', toolCalls: [closeCall()] });

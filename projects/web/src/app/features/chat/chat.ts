@@ -5,6 +5,7 @@ import { visibleSurfaces, type Turn } from '../../core/agent-run';
 import { AgentSession } from '../../core/agent-session';
 import { formatWhen } from '../../core/api';
 import { ServerStatus } from '../../core/server-status';
+import { ClientTools } from '../../core/client-tools';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
 import { Icon } from '../../shared/ui/icon';
@@ -120,6 +121,14 @@ function componentOf(node: unknown): string {
                         {{ f.busy ? 'Refreshing…' : 'Refresh' }}
                       </button>
                     }
+                    @if (surface.filter) {
+                      <span class="mr-auto flex flex-wrap items-center gap-2 text-body-sm text-fg-muted">
+                        Filtered by the agent: <span class="font-medium text-fg">{{ surface.filter }}</span>
+                        <button type="button" class="btn btn-ghost px-3" (click)="session.clearFilter(surface.surfaceId)">
+                          Clear<span class="sr-only"> filter on {{ name }}</span>
+                        </button>
+                      </span>
+                    }
                     <span class="badge badge-agent">
                       <span class="size-1.5 rounded-full bg-fg" aria-hidden="true"></span>
                       Rendered by agent · {{ name }}
@@ -160,7 +169,20 @@ function componentOf(node: unknown): string {
       </ol>
       <div #end></div>
 
+      @if (clientTools.missed(); as m) {
+        <p class="rounded-md border border-border bg-surface-1 px-4 py-3 text-body-sm text-fg-muted" role="status">
+          The agent pointed at lines {{ m.from }}–{{ m.to }} of <span class="font-mono">{{ m.path }}</span>, but that diff is not
+          on screen. Ask it to show the pull request first.
+        </p>
+      }
+
       <form class="sticky bottom-0 mt-auto flex flex-col gap-3 bg-bg pt-2 pb-4" (submit)="submit($event)">
+        @if (session.awaitingApproval()) {
+          <p id="waiting-hint" class="text-body-sm text-fg-muted">
+            A change is waiting for your decision above. Until then the agent can answer, filter and point things out, but
+            not change anything.
+          </p>
+        }
         @if (chips().length) {
           <div class="flex flex-wrap gap-2" role="group" [attr.aria-label]="session.turns().length ? 'Suggested follow-ups' : 'Suggestions'">
             @for (s of chips(); track s) {
@@ -177,8 +199,8 @@ function componentOf(node: unknown): string {
             id="prompt"
             rows="1"
             class="max-h-40 min-h-11 flex-1 resize-none bg-transparent py-2.5 text-body text-fg outline-none placeholder:text-fg-faint disabled:cursor-not-allowed"
-            [placeholder]="session.awaitingApproval() ? 'Resolve the approval first' : 'Ask anything about this repo…'"
-            [disabled]="session.awaitingApproval()"
+            [placeholder]="session.awaitingApproval() ? 'Ask a question while the change waits…' : 'Ask anything about this repo…'"
+            [attr.aria-describedby]="session.awaitingApproval() ? 'waiting-hint' : null"
             [value]="draft()"
             (input)="draft.set(promptBox.value)"
             (keydown.enter)="onEnter($event)"
@@ -206,6 +228,7 @@ function componentOf(node: unknown): string {
 export class Chat implements OnInit {
   protected readonly session = inject(AgentSession);
   protected readonly status = inject(ServerStatus);
+  protected readonly clientTools = inject(ClientTools);
   private readonly router = inject(Router);
   protected readonly suggestions = SUGGESTIONS;
   protected readonly draft = this.session.draft;
@@ -241,7 +264,8 @@ export class Chat implements OnInit {
   });
 
   /** No new prompt while the agent works or a card waits for a decision. */
-  protected readonly locked = computed(() => this.session.isBusy() || this.session.awaitingApproval());
+  /** Side questions are allowed while a change waits (the server runs them read-only). */
+  protected readonly locked = computed(() => this.session.isBusy());
 
   constructor() {
     // A finished run changes the open counts and the API quota in the chrome.
