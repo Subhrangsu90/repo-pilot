@@ -3,6 +3,7 @@ import { bulkUpdateIssues, createRelease, PropsOf, ReleaseEdits, PrReviewEdits, 
 import { GitHubError } from '../github/client';
 import { commentableLines, fetchPullRequest, MAX_DIFFS, trimToComments } from '../github/pulls';
 import { fetchReleaseChanges, renderNotes, tagExists } from '../github/releases';
+import { findInjection } from './injection';
 import { ageDays, resolveRepo, ToolContext, ToolError } from './read-tools';
 import type { Inverse } from './undo';
 
@@ -265,6 +266,8 @@ export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestRev
     });
 
     const carry: ReviewCarry = { headSha: pr.headSha, comments, allowedEvents, event };
+    // Checked in code: the warning shows even when the model did not notice the injection.
+    const injection = findInjection(pr.info.title) ?? findInjection(pr.body);
     return {
       kind: 'card',
       component: 'PrReview',
@@ -282,6 +285,7 @@ export const submitPullRequestReviewTool: ActionTool<typeof submitPullRequestRev
         event,
         allowedEvents,
         ...(own ? { eventNote: 'You opened this pull request, and GitHub only allows a comment review on your own pull requests.' } : {}),
+        ...(injection ? { injectionWarning: injection } : {}),
       },
     };
   },

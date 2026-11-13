@@ -1,4 +1,5 @@
 import { HttpClient, HttpErrorResponse, httpResource } from '@angular/common/http';
+import { valueOf } from '../../core/resource';
 import { Component, computed, ElementRef, inject, linkedSignal, signal, viewChild } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
@@ -199,7 +200,7 @@ export class History {
     url: '/api/sessions',
     params: { filter: this.filter(), ...(this.query().trim() ? { q: this.query().trim() } : {}) },
   }));
-  protected readonly list = computed(() => this.sessions.value()?.items ?? []);
+  protected readonly list = computed(() => valueOf(this.sessions)?.items ?? []);
 
   /** Today / Yesterday / Earlier, newest first, empty groups left out. */
   protected readonly groups = computed(() => {

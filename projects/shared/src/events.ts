@@ -43,7 +43,16 @@ export type AgentEvent =
   /** The run paused on an ApprovalCard; it resumes through POST /api/runs/:runId/actions. */
   | { type: 'CUSTOM'; name: 'approval'; value: ApprovalRequest }
   /** Follow-up prompts suggested from what the run showed; rendered as chips above the prompt box. */
-  | { type: 'CUSTOM'; name: 'followups'; value: { prompts: string[] } };
+  | { type: 'CUSTOM'; name: 'followups'; value: { prompts: string[] } }
+  /** A client tool call (navigate_to, highlight_lines, apply_table_filter), validated by the server; the browser runs it. */
+  | { type: 'CUSTOM'; name: 'client_tool'; value: ClientToolCall };
+
+export interface ClientToolCall {
+  callId: string;
+  name: string;
+  /** Parsed with the tool's own input schema on the server. */
+  args: unknown;
+}
 
 export interface UiSurface {
   surfaceId: string;
@@ -82,6 +91,8 @@ export interface StartRunRequest {
   model?: ModelOption;
   /** The PR review page: the run must end on a review draft of this pull request. */
   reviewPullRequest?: number;
+  /** "owner/name" picked in the app; a conversation stays on the repo it started with. */
+  repo?: string;
 }
 
 export interface StartRunResponse {

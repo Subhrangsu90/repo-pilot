@@ -16,13 +16,19 @@ export interface ToolSpec<I extends z.ZodType = z.ZodType> {
   /** Shown in the step timeline while the tool runs. */
   label: string;
   input: I;
+  /**
+   * 'client': runs in the browser (it moves, highlights or filters what is on
+   * screen and never touches GitHub). The server validates the input and streams
+   * it to the app as a `client_tool` event.
+   */
+  side?: 'client';
 }
 
 const repoRef = z
   .string()
   .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'Use owner/repo')
   .optional()
-  .describe('owner/repo. Omit to use the default repository.');
+  .describe('owner/repo. Omit it: the app works on the repository the user selected.');
 
 export const listPullRequests = {
   name: 'list_pull_requests',
@@ -187,17 +193,7 @@ export const createRelease = {
   }),
 } as const satisfies ToolSpec;
 
-export const toolSpecs = [
-  listPullRequests,
-  listIssues,
-  getRepoHealth,
-  getPullRequest,
-  getReleaseChanges,
-  renderUi,
-  bulkUpdateIssues,
-  submitPullRequestReview,
-  createRelease,
-] as const;
+// `toolSpecs` (every tool, server and client) is declared at the end of this file.
 
 export type ToolName = (typeof toolSpecs)[number]['name'];
 
@@ -213,3 +209,90 @@ export function getToolSpec(name: string): ToolSpec | undefined {
 export function needsApproval(name: string): boolean {
   return (getToolSpec(name)?.risk ?? 'destructive') !== 'read';
 }
+
+// ---------------------------------------------------------------------------
+// Client tools: the agent drives the UI (doc §8 "Client tools"). Read-only:
+// they change what is on screen, never the repository, so they need no approval.
+// ---------------------------------------------------------------------------
+
+export const navigateTo = {
+  name: 'navigate_to',
+  risk: 'read',
+  side: 'client',
+  label: 'Opening the page',
+  description:
+    'Move the app to one of its pages. Use when the user asks to go somewhere ("open the audit log", "take me to ' +
+    'the issues"). page "pull_request" needs the number and opens that pull request\'s review page, where an agent ' +
+    'review starts by itself.',
+  input: z
+    .object({
+      page: z.enum(['ask', 'pull_requests', 'pull_request', 'issues', 'releases', 'history', 'audit']),
+      number: z.number().int().positive().optional().describe('Pull request number, only for page "pull_request".'),
+    })
+    .refine((v) => v.page !== 'pull_request' || v.number !== undefined, { message: 'page "pull_request" needs a number', path: ['number'] }),
+} as const satisfies ToolSpec;
+
+export const highlightLines = {
+  name: 'highlight_lines',
+  risk: 'read',
+  side: 'client',
+  label: 'Highlighting lines',
+  description:
+    'Scroll to and highlight lines of a file in a diff that is already on screen (from get_pull_request or a review ' +
+    'draft). Use for "take me to the auth changes", "where is the password logged?". path is the file path and ' +
+    'from/to are new-file line numbers exactly as numbered in the diff you read. Pick the lines that answer the ' +
+    'question, then say in one sentence what is there.',
+  input: z
+    .object({
+      path: z.string().min(1).max(300),
+      from: z.number().int().positive(),
+      to: z.number().int().positive(),
+    })
+    .refine((v) => v.to >= v.from && v.to - v.from <= 200, { message: 'to must be from…from+200', path: ['to'] }),
+} as const satisfies ToolSpec;
+
+export const applyTableFilter = {
+  name: 'apply_table_filter',
+  risk: 'read',
+  side: 'client',
+  label: 'Filtering the table',
+  description:
+    'Filter the issue table or pull request list that is already on screen, in place, without fetching again. Use ' +
+    'when the user narrows something just shown ("only show bugs", "just the drafts", "only mine"). target is ' +
+    'IssueTable for issues (also the oldest-issues table of a health report) or PrList for pull requests. Rows must ' +
+    'have every label given. Examples: "only show bugs" → {target: "IssueTable", labels: ["bug"]}; "just the ' +
+    'drafts" → {target: "PrList", state: "draft"}; "show everything again" → {target: ..., clear: true}.',
+  input: z.object({
+    target: z.enum(['IssueTable', 'PrList']),
+    labels: z.array(z.string().max(50)).max(5).default([]),
+    state: z.enum(['open', 'closed', 'draft', 'merged']).optional(),
+    author: z.string().max(39).optional().describe('GitHub login.'),
+    clear: z.boolean().default(false),
+  }),
+} as const satisfies ToolSpec;
+
+export const clientToolSpecs = [navigateTo, highlightLines, applyTableFilter] as const;
+
+/** True for tools the browser runs. */
+export function isClientTool(name: string): boolean {
+  return getToolSpec(name)?.side === 'client';
+}
+
+export type NavigateToInput = z.infer<typeof navigateTo.input>;
+export type HighlightLinesInput = z.infer<typeof highlightLines.input>;
+export type ApplyTableFilterInput = z.infer<typeof applyTableFilter.input>;
+
+export const toolSpecs = [
+  listPullRequests,
+  listIssues,
+  getRepoHealth,
+  getPullRequest,
+  getReleaseChanges,
+  renderUi,
+  bulkUpdateIssues,
+  submitPullRequestReview,
+  createRelease,
+  navigateTo,
+  highlightLines,
+  applyTableFilter,
+] as const;

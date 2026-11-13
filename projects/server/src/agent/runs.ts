@@ -31,6 +31,10 @@ export interface Thread {
   messages: ChatMessage[];
   busy: boolean;
   touched: number;
+  /** The GitHub login that started the conversation; only they may continue it or answer its approvals. */
+  owner?: string;
+  /** The repository ("owner/name") the conversation works on; set by its first prompt. */
+  repo?: string;
   /** Model picked in the UI when the conversation last ran; resumed runs use it too. */
   model?: ModelOption;
   /** A tool call paused on an ApprovalCard. New prompts are refused until it is answered. */
@@ -65,7 +69,7 @@ export function onRunFinished(fn: (run: FinishedRun, thread: Thread) => void) {
 }
 
 /** Puts a conversation loaded from the database back in memory (after a restart). */
-export function restoreThread(data: Pick<Thread, 'id' | 'messages' | 'model' | 'pending'>): Thread {
+export function restoreThread(data: Pick<Thread, 'id' | 'messages' | 'model' | 'pending' | 'owner' | 'repo'>): Thread {
   const existing = threads.get(data.id);
   if (existing) return existing;
   const thread: Thread = { ...data, busy: false, touched: Date.now() };
@@ -80,9 +84,9 @@ export function dropThread(id: string) {
   if (thread && !thread.busy) threads.delete(id);
 }
 
-export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string } = {}): StartRunResponse {
+export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string; owner?: string; repo?: string } = {}): StartRunResponse {
   const tid = threadId && threads.has(threadId) ? threadId : randomUUID();
-  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now() };
+  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now(), owner: opts.owner, repo: opts.repo };
   if (thread.busy) throw new ThreadBusyError('This conversation is still running.');
   thread.busy = true;
   thread.touched = Date.now();
@@ -132,6 +136,12 @@ export function subscribe(runId: string, listener: (event: AgentEvent) => void):
   if (run.done) return () => {};
   run.listeners.add(listener);
   return () => run.listeners.delete(listener);
+}
+
+/** The owner of the conversation a run belongs to (undefined for an unknown run). */
+export function runOwner(runId: string): string | undefined {
+  const run = runs.get(runId);
+  return run ? threads.get(run.threadId)?.owner : undefined;
 }
 
 export function isTerminal(event: AgentEvent) {

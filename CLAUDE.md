@@ -10,12 +10,13 @@ Full design: [docs/project-documentation.md](docs/project-documentation.md).
 | --- | --- | --- |
 | `projects/web` | Angular 22 app (`@repopilot/web`) | `npm run dev:web` → `http://localhost:4200` |
 | `projects/server` | Node agent server, Fastify + tsx (`@repopilot/server`) | `npm run dev:server` → `http://localhost:3000/api/health` |
-| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, prompt doc, fixtures | `npm test -w @repopilot/shared` |
+| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, prompt doc, tools, GitHub URLs | `npm test -w @repopilot/shared` |
 
 `@repopilot/shared` exports TypeScript source (no build step). The web app resolves it
 through a `paths` entry in `projects/web/tsconfig.json`; the server runs it through tsx.
 
-Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
+Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`. Note: `typecheck`
+does not check Angular templates; `ng build` does.
 
 ## Database (Postgres in Docker + Drizzle)
 
@@ -31,18 +32,15 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   `TEST_DATABASE_URL=postgres://repopilot:repopilot@127.0.0.1:5433/repopilot_test npx vitest run
   src/store.integration.spec.ts` in `projects/server`.
 
-## Demo repository (`Subhrangsu90/repopilot-demo`)
+## Setup check
 
-- `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude and
-  the GitHub token/permissions. Prints status only, never secrets.
-- `npm run seed:demo -w @repopilot/server [-- --yes]` – seeds the demo repo from
-  `projects/server/src/seed-demo-content.ts`. Dry run without `--yes`. Idempotent: once the
-  `v1.0.0` release exists it only creates missing files and never replays history over later
-  commits. Content is planted for the demo: #8 is a prompt-injection issue (must be treated as
-  data), PR #15 has 3 deliberate review bugs (unnormalised rate-limit key, `>` off-by-one,
-  password logged), PR #14 is merged (undo demo), #16 draft, #17 open.
-- Known limitation: the Contents API ignores commit dates, so all commits are dated 2026-11-09;
-  backdating would need a Git Data API rewrite + force-push of `main` (user declined for now).
+- `npm run check -w @repopilot/server` – verifies Gemini (primary + fallback), Ollama, Claude, the
+  GitHub token (repositories it can see) and whether GitHub sign-in is fully configured. Prints
+  status only, never secrets.
+- No seed data, demo repository, fixtures, playground or e2e suite any more (removed 2026-11-12 at
+  the user's request). The repo `Subhrangsu90/repopilot-demo` still exists on GitHub with the data
+  seeded earlier (#8 injection issue, PR #15 with 3 planted bugs, PR #16 with an injected
+  description), but nothing in the code assumes it.
 
 ## Decisions (agreed 2026-11-10)
 
@@ -51,7 +49,11 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - LLM: **Gemini Flash** (free tier) is the default; **Claude Haiku** optional; **Gemma via
   Ollama** for the local/private story. Selected by `LLM_PROVIDER` in `projects/server/.env`.
   Keep providers behind one interface so the switch is a config change.
-- GitHub: fine-grained PAT in `projects/server/.env` until week 4, then GitHub OAuth.
+- GitHub: OAuth App sign-in when `GITHUB_OAUTH_CLIENT_ID` + `_SECRET` + `SESSION_SECRET` are set
+  (week 4); otherwise dev mode, everyone acting as the fine-grained PAT's owner (`GITHUB_TOKEN`).
+- Repositories (2026-11-12, user's decision): no allowlist. Scope `repo` (public + private; an
+  OAuth App cannot narrow it per repo). The side nav lists every repo the user can access and the
+  app works on the selected one only (see "Multi-repo" under week 4).
 - Routes render client-side (`RenderMode.Client`); the SSR server only serves the shell.
 - Theme: **Graphite by default**, Light as a toggle saved in localStorage (`repopilot-theme`),
   applied as `<html data-theme>`; index.html sets it before first paint.
@@ -59,10 +61,10 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   entries, then sessions/History). A hosted Postgres is chosen at deploy time (week 4).
 - Routes: `/` landing (public), app pages inside the `Shell` layout: `/ask` (chat; `?q=` sends a
   prompt). The side nav shows the Screen Spec's six links (Ask, Pull requests, Issues, Releases,
-  History, Audit log) with live PR/issue counts; unbuilt ones are dimmed, not links ("Coming soon"),
+  History, Audit log) with live PR/issue counts (all six built as of 2026-11-12); unbuilt ones are dimmed, not links ("Coming soon"),
   and get a `path` in `NAV` (`layout/shell.ts`) as each page is built. Model switch on Ask only;
-  each page draws its own top bar (Ask: repo, API quota, avatar); theme toggle sits in the nav foot.
-  `/playground` is a dev-only renderer test page, out of the nav and landing (URL only).
+  Ask has no top bar (user's decision 2026-11-12: the repo is in the nav picker, the account in the nav foot, the API quota in Settings; only an alert when the server is unreachable); theme toggle sits in the nav foot.
+  `/signin` is outside the Shell (see week 4).
 - Screen Spec (2026-11-11, user's Claude Docs doc): <https://claude.ai/artifact/7PvQ8ojSvhP7zT8EaCvKwp>
   — the 7 screens, shared layout, play-mode behaviour and open gaps; read it with the Claude Docs
   tools. Where it and the design system disagree, the design system wins (user's decision); the
@@ -89,6 +91,11 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
   (`headRefName`); IssueTable shows `assignees` ("Unassigned" when empty).
 
 ## Rules that must not break
+
+- Every GitHub address comes from `projects/shared/src/github.ts` (`GITHUB_WEB`, `GITHUB_API`,
+  `GITHUB_AVATARS`, `githubUrl.*` builders, `GITHUB_WEB_HOST` / `GITHUB_AVATAR_HOST` for catalog
+  `z.url` checks, `isGitHubUrl()` / `isGitHubAvatar()` before rendering a link or image). No
+  `https://github.com` or `api.github.com` literals elsewhere (tests excepted).
 
 - The agent renders **only** catalog components. Every node passes `validateNode()` on
   the server and again in `GenUiHost` on the client. Invalid → `ErrorFallback`.
@@ -170,14 +177,148 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
       (search, filters, Today/Yesterday/Earlier, preview, rename, delete, Resume → `/ask?session=id`).
       Verified live: a paused approval stored only in Postgres was answered after a restart; the resumed
       run was saved; a second answer got 404. Not tried live yet: approve → audit entry → Undo.
-- [ ] Next: the agent naming sessions (now: first line of the prompt), last-6-turns + summary context
-      (doc §9b step 5), Refresh on stale surfaces, Issues page.
-- [ ] Week 3 (rest) – `FormSurface`, audit log + undo, Postgres
-      (Docker + Drizzle) for runs/audit/sessions, History page (doc §9b). First read tool that
-      returns issue/PR bodies must be tested against prompt-injection issue #8. Stored messages must
-      keep tool calls/results and provider `raw` parts, not only `role` + `text`, or replayed
-      history loses tool context and Gemini thought signatures.
-- [ ] Week 4 – `DiffViewer` review, client tools, Playwright e2e, OAuth, deploy.
+- [x] Week 3 merged to `master` (PR #1, 2026-11-11). FormSurface ships as the ReleaseForm pattern,
+      not a separate catalog component. Stored sessions keep tool calls/results and provider `raw`
+      parts (needed for replay and Gemini thought signatures).
+- [x] Week 3 wrap-up (branch `chore/week-3-wrap-up`, done 2026-11-12) – live checks before week 4. Verified
+      2026-11-10 against GitHub: approve → audit → Undo (`aud_0001`: closed #9, #10 with #11
+      deselected, then reopened), real release publish + Undo (`aud_0002`: v1.0.1 release and tag
+      deleted), real review submit (`aud_0003`: Comment on PR #17; reviews have no undo).
+      Prompt injection (2026-11-11): issue bodies never reach the model (issue tools send titles
+      only), so #8 cannot fire. PR #16's description now plants an injection (also in the seed).
+      "Review pull request #16": Gemini drafted a Comment-only PrReview, Gemma drafted nothing;
+      neither obeyed it (no issue tools, no Approve; own PR allows Comment only anyway) and nothing
+      reached GitHub. Gaps found, then fixed (2026-11-12): (1) neither model flagged it →
+      `tools/injection.ts` `findInjection()` checks the PR description in code; `get_pull_request`
+      adds `injectionWarning` for the model and a warning in the diff Section, the review dry run
+      sets PrReview `injectionWarning` (flagged sentence, shown as text in a `role="note"` box);
+      (2) Gemma claimed a draft without the tool → a review is owed when `reviewPullRequest` is set
+      or the prompt says "review" and the run read exactly one PR; the loop reminds the model once
+      (its claim is held back), then the summary-only fallback drafts it; (3) PR diff Sections got
+      health-report chips → `surfaceKey()` keys them `PullRequestDiff`. Re-verified live on #16:
+      Gemma and Gemini both drafted a real PrReview with the warning and mentioned the injection;
+      rejected, nothing posted. Titles (2026-11-12): `markTitles()` / `titleWarning()` flag issue and
+      PR titles in `list_issues`, `list_pull_requests`, `get_repo_health` (oldest issues) and
+      `get_release_changes` (model note only, no UI); flagged rows/cards carry `injection: true`
+      (IssueRow, PrCard) and show `InjectionBadge`; `get_pull_request` and the review dry run check
+      the PR title as well as the body. No false alarms on the demo repo's 17 titles; no planted
+      title injection exists, so the badge is covered by tests only. `ng test` sometimes fails on
+      the first (cold) run with "Timeout waiting for worker to respond" / "no tests"; a re-run passes.
+      Issues page (2026-11-12, no artboard; user chose "list + bulk close via agent"): `/issues`,
+      `GET /api/issues?state=open|closed|all` (reuses `list_issues`: validated rows with injection
+      flags, max 100), state chips + label chips (labels filtered in the browser), selectable
+      IssueTable → "Close N…" / "Reopen N…" sends "Close issues #9 and #10 as not planned" to the
+      page's own AgentSession; only the ApprovalCard + steps are shown (the table is already there);
+      list and nav counts reload when the run settles. Verified with Gemma via the API: card listed
+      exactly #9, #10; rejected, nothing changed. Clicked through by the user (`aud_0004`: closed
+      #2, #3, #4 from the page; not undone).
+      Context window (2026-11-12, doc §9b step 5): `agent/context.ts` `contextWindow()` sends the
+      model the last 6 turns whole (a turn starts at a user prompt; `[RepoPilot app]` notes are not
+      prompts, so tool calls, results and `raw` parts are never split) and appends older turns to
+      the system prompt as a summary. Differs from the doc on purpose: the summary is built in code
+      (prompt → tools run and how they ended → the agent's reply, ≤ 4000 chars, oldest lines
+      dropped first), not by a model call, so it costs no quota, cannot invent facts and needs no
+      `summary` column; the stored thread stays complete. Follow-ups such as "only show bugs"
+      never depended on this (the whole thread was sent before). Checked on stored sessions.
+      Refresh (2026-11-12, doc §9b step 6): `GET /api/sessions/:id` adds `refreshable` (surfaceId +
+      capturedAt = the run's start) for surfaces made by read tools, matched by `${runId}-${callId}`
+      to the stored tool call (never render_ui or gate surfaces); `POST
+      /api/sessions/:id/surfaces/:surfaceId/refresh` re-runs that tool with its stored input (no
+      model) and returns a validated node (`agent/refresh.ts`). Ask shows "Captured …" + Refresh on
+      those surfaces of a reopened session and swaps the node in place; not saved, so reopening
+      again shows the captured data. Session titles (`agent/title.ts` `sessionTitle()`): named in
+      code from the first run's tool calls, set on insert only (a rename sticks): "PR #16 review",
+      "Release v1.1.0", "Close issues #9, #10", "Reopen 4 issues", "Health report"; list questions
+      keep the prompt line (it says more than "Open pull requests"). Not a model call, unlike doc
+      §9b step 1.
+- [ ] Week 4 (branch `feat/week-4`, from `chore/week-3-wrap-up`).
+  - [x] Client tools (2026-11-12): `navigate_to`, `highlight_lines`, `apply_table_filter` in
+        `shared/src/tools.ts` with `side: 'client'` (risk read). The loop validates the input, streams
+        `CUSTOM client_tool` and tells the model the app applied it (no executor). Browser:
+        `AgentSession.runClientTool` → Router (`routeFor`), `ClientTools.requestHighlight` (DiffViewer
+        outlines the new-file lines, scrolls, claims it; unclaimed after 300 ms → "not on screen" note
+        in Ask), `filterTables` (pure, `agent-run.ts`: filters the latest surface containing the
+        IssueTable/PrList, also nested in the health report; keeps `base` for Clear; replays from
+        History; navigation/highlights do not replay). Side questions while a change waits:
+        `POST /api/runs` on a pending thread runs `agent/side.ts` (copy of the thread with the paused
+        call answered "not decided yet", read + client tools only, `readOnly` refuses changes in code);
+        the copy is discarded, the run is saved, `replayRuns` attaches the resumed run to the turn that
+        waited. Ask no longer locks the prompt box while a card waits (`locked` = busy only).
+        Verified live with Gemma: health report → "Only show bugs" filtered in place (needed examples
+        in the tool description); "Review pull request #15" pending → "Take me to where the rate
+        limit key is built" → `highlight_lines` src/auth/login.js:6–34; rejected, nothing posted.
+  - [x] (Removed 2026-11-12 at the user's request, with the playground, `shared/src/fixtures.ts`
+        and the seed script; tests that used fixtures now use inline data.) Was: mock agent + fake
+        GitHub + Playwright + recorded streams: `E2E_MODE=1` forced
+        `LLM_PROVIDER=mock` (`llm/mock.ts`, scripts per demo prompt), an in-process `FakeGitHub`
+        (`testing/fake-github.ts`, demo data for `demo-owner/repopilot-demo`, records writes,
+        anything unmocked → 404) and no database, whatever `.env` says; adds
+        `GET /api/__test__/github-writes` and `POST /api/__test__/reset`. `npm run e2e` (root
+        `playwright.config.ts`, `e2e/demo.spec.ts`) starts the server on :3100 and `ng serve` on
+        :4300 with `proxy.e2e.json` (never the dev :3000/:4200): PR list, approve 2 of 3 → exactly
+        two PATCHes, reject → no writes, "only show bugs" filter + Clear, Issues page close, invalid /
+        XSS fallback. 6 passed. Recorded streams: `web/src/app/core/recorded/*.json` (real runs
+        exported from Postgres) replayed in `recorded-streams.spec.ts`. Note: `npm run typecheck`
+        does not check templates; `ng build` (or the e2e run) does.
+  - [x] GitHub OAuth, code complete (2026-11-12; needs a registered OAuth App to try for real):
+        `auth/index.ts` `createAuth()` → mode `oauth` (all three env vars set) or `token` (dev: acts as
+        the GITHUB_TOKEN owner, as before). `/api/auth/login` (state in a sealed cookie, scope
+        `GITHUB_OAUTH_SCOPE`, default `public_repo`) → GitHub → `/api/auth/callback` (state checked,
+        code exchanged server-side, `/user`) → sealed `rp_session` cookie (AES-256-GCM, httpOnly,
+        SameSite=Lax, Secure on https, 8 h; holds the token, never readable by the page) → `/ask`.
+        `/api/auth/me`, `POST /api/auth/logout`. An `onRequest` hook gives every `/api/*` request
+        its user (401 in OAuth mode without one; public: `/api/auth/*`, `/api/health`,
+        `/api/__test__/*`). `who(req)` → `{ login, ctx }`: all GitHub calls use that user's token.
+        Ownership: threads carry `owner` (new prompts, approvals and SSE of someone else's run →
+        404 / not_found); the store scopes sessions by `user_id` and the audit log by `approved_by`
+        (`recordAudit` takes `approver`). Existing rows keep working in dev mode (they carry the PAT
+        owner's login). Web: sign-in page `/signin` (`features/auth/sign-in.ts`, outside the Shell;
+        states: signed out, `?error=denied|state|exchange|expired`, `?signedOut=1`, already signed in,
+        dev mode, server unreachable). `requireSignIn` guard on the Shell route sends signed-out
+        visitors to `/signin?next=<page>`; `/api/auth/login?next=` keeps it in the sealed state cookie
+        and the callback returns there (`safeNext()`: in-app paths only, never `//host`, `/api/`,
+        `/signin`); failures redirect to `/signin?error=…`. `Auth.load()` (promise, shared), 401
+        interceptor → `expired` + `/signin?error=expired&next=<here>`. Login + Sign out in the nav
+        foot; Landing's Sign in buttons go to `/signin` when OAuth needs it. Lesson: read
+        `httpResource` values through `core/resource.ts` `valueOf()` (`.value()` throws in the error
+        state, which stopped the view and left the sign-in link without an href). Verified: dev mode unchanged on the live server;
+        OAuth mode with placeholder settings → every API 401, login redirect correct. Not done: token
+        revocation on sign-out, a GitHub App (fine-grained) instead of an OAuth App.
+  - [x] Multi-repo (2026-11-12): config has no `GITHUB_REPO_ALLOWLIST`; `GITHUB_OAUTH_SCOPE`
+        defaults to `repo`; empty OAuth env values count as unset. `GET /api/repos` (the user's
+        repos, owner/collaborator/org, sorted by push, archived hidden, max 100). `ToolContext.repo`
+        = the selected repo; `resolveRepo()` refuses any other repo the model names ("This
+        conversation works on X only"). Pages pass `?repo=owner/name` (validated by
+        `REPO_PATTERN`; GitHub 403/404 → "not found or no access"). `POST /api/runs {repo}`: a
+        thread keeps the repo of its first prompt (`Thread.repo`, stored in `sessions.repo`), a
+        different repo → 409 "start a new chat"; approvals and Refresh use the thread's/session's
+        repo. Audit: `recordAudit` gets `repo`; inverses are pinned to it (`pinRepo`) so Undo acts
+        there; older entries fall back to the session's repo. Web: `core/repo.ts` `RepoChoice`
+        (list, `selected`, pick saved in localStorage `repopilot-repo`, falls back to the most
+        recently pushed repo), picker in the Shell (repo name; owner shown only when not yours;
+        "private"), `onRepoSwitch()`: Ask starts a new chat, Issues / Releases reset, PR review
+        goes back to `/pulls`; reopening a session from History selects its repo. Verified in a
+        browser on a dev-mode server (84 repos listed, switching updates counts and pages, pick
+        survives reload).
+  - [x] Fixes from use (2026-11-12): (1) an empty model reply with nothing on screen (Gemma on
+        "give details about this repo") now gets one `[RepoPilot app]` reminder (`EMPTY_REMINDER` in
+        `loop.ts`), then a visible "could not produce an answer" note; never when a tool already
+        showed UI. (2) `get_repo_health` gives the model `commitsPerWeek` (the chart's numbers) and
+        all `contributors`, so "commits per week" follow-ups can be answered. (3) Commit history is
+        paged (`HISTORY_PAGE_QUERY`, 100 per page, up to 5 pages = 500); beyond that the data and
+        the Section description say the counts are partial. Verified with Gemma on
+        Subhrangsu90/inkframe-app: 109 commits all counted, weekly breakdown answered.
+  - [x] Profile & settings (2026-11-12, no artboard): `/settings` (`features/settings/settings.ts`),
+        opened from the avatar + login in the nav foot. Sections: Profile (GitHub name, login, bio,
+        company, location, member since, repo counts, View on GitHub), GitHub access (mode, scopes
+        GitHub actually granted from `x-oauth-scopes` via `GitHub.me()`, "sign in again" when they
+        are less than `GITHUB_OAUTH_SCOPE`, Manage access/tokens on GitHub, Sign out in OAuth mode),
+        Preferences (theme, model, repository; saved in the browser), Your activity
+        (`Store.countsFor(userId)`: conversations, waiting, approved, undone; links to History /
+        Audit log; a note without the database). `GET /api/profile` (never the token). The repo
+        picker is now `shared/ui/repo-picker.ts`, used by the nav and Settings. Avatars and links
+        only from `avatars.githubusercontent.com` / `github.com`.
+  - [ ] Deploy (hosted Postgres): host not chosen yet.
 
 ## Agent server notes
 
@@ -211,7 +352,7 @@ Root scripts: `npm test` (all workspaces), `npm run build`, `npm run typecheck`.
 - `GET /api/pulls` (open PRs as PrCard props) and `GET /api/pulls/:number` (header, no diff) serve
   the pages; the review page runs its own `AgentSession` (component provider) separate from Ask.
 - `GET /api/overview` → `{repo, openPullRequests, openIssues, rateLimit, viewer}` (one GraphQL call)
-  for the nav counts and the Ask top bar; the client reloads it after each run.
+  for the nav counts and the API quota in Settings; the client reloads it after each run.
 - Follow-up chips: `agent/followups.ts` picks up to 3 prompts from the components a run showed and
   sends `CUSTOM followups` before RUN_FINISHED (not while an approval waits). Only prompts the
   current tools can answer.

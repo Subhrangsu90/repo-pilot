@@ -1,5 +1,6 @@
 import { Component, computed, input } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
+import { InjectionBadge } from '../../shared/ui/injection-badge';
 
 type Pr = PropsOf<'PrCard'>;
 
@@ -24,6 +25,7 @@ const CI: Record<Pr['ci'], { label: string; dot: string | null }> = {
  */
 @Component({
   selector: 'app-pr-card',
+  imports: [InjectionBadge],
   host: { class: 'block' },
   template: `
     @let p = props();
@@ -41,6 +43,9 @@ const CI: Record<Pr['ci'], { label: string; dot: string | null }> = {
         </h3>
         <!-- text-faint fails contrast on surface-3, so it steps up to muted on hover. -->
         <span class="font-mono text-body-sm text-fg-faint group-has-[a]:group-hover:text-fg-muted">#{{ p.number }}</span>
+        @if (p.injection) {
+          <app-injection-badge />
+        }
       </div>
 
       <div class="flex flex-wrap gap-x-4.5 gap-y-1.5 text-body-sm text-fg-muted">

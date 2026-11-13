@@ -1,9 +1,11 @@
 import { httpResource } from '@angular/common/http';
+import { valueOf } from '../../core/resource';
 import { Component, computed, effect, inject, input, untracked } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { EmitFn } from '@repopilot/shared';
 import { hasReview, visibleSurfaces } from '../../core/agent-run';
 import { AgentSession } from '../../core/agent-session';
+import { onRepoSwitch, RepoChoice } from '../../core/repo';
 import { PR_REVIEW_ON_PAGE } from '../../genui/components/pr-review';
 import { StepTimeline } from '../../genui/components/step-timeline';
 import { GenUiHost } from '../../genui/genui-host';
@@ -27,7 +29,7 @@ import { PrHeader, PrInfo } from '../../shared/ui/pr-header';
       @if (!valid()) {
         <p class="card border-danger p-4 text-body-sm" role="alert">"{{ number() }}" is not a pull request number.</p>
       } @else {
-        @if (pr.value(); as info) {
+        @if (prInfo(); as info) {
           <app-pr-header [pr]="info" [level]="1" />
         } @else if (pr.error()) {
           <p class="card border-danger p-4 text-body-sm" role="alert">Pull request #{{ number() }} could not be loaded.</p>
@@ -88,14 +90,22 @@ export class PullReview {
   readonly number = input.required<string>();
 
   protected readonly session = inject(AgentSession);
+  private readonly router = inject(Router);
   protected readonly valid = computed(() => /^[1-9]\d{0,9}$/.test(this.number()));
-  protected readonly pr = httpResource<PrInfo>(() => (this.valid() ? `/api/pulls/${this.number()}` : undefined));
+  private readonly repo = inject(RepoChoice).selected;
+  protected readonly pr = httpResource<PrInfo>(() => {
+    const repo = this.repo();
+    return this.valid() && repo ? { url: `/api/pulls/${this.number()}`, params: { repo } } : undefined;
+  });
+  protected readonly prInfo = computed(() => valueOf(this.pr));
   protected readonly turn = computed(() => this.session.turns().at(-1));
   protected readonly onEmit: EmitFn = this.session.handleUiEvent;
   protected readonly surfaces = visibleSurfaces;
   protected readonly hasReview = hasReview;
 
   constructor() {
+    // The number belongs to the old repository: back to the list of the new one.
+    onRepoSwitch(() => void this.router.navigate(['/pulls']));
     // A new PR number starts a new review conversation.
     effect(() => {
       if (!this.valid()) return;

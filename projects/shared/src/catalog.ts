@@ -13,6 +13,7 @@
  * compile error.
  */
 import * as z from 'zod';
+import { GITHUB_AVATAR_HOST, GITHUB_WEB_HOST } from './github';
 
 // ---------------------------------------------------------------------------
 // Building blocks
@@ -87,6 +88,8 @@ export const IssueRow = z.object({
   // Shown in the table (design system: "labels, assignee and age").
   assignees: z.array(githubLogin).max(10).default([]),
   ageDays: z.number().int().nonnegative(),
+  /** The server flagged the title as a possible prompt injection (shown as a warning badge). */
+  injection: z.boolean().optional(),
 });
 
 export const IssueTableProps = z.object({
@@ -106,7 +109,7 @@ export const ContributorListProps = z.object({
         // Only GitHub's avatar CDN over https: the model cannot make the
         // browser load arbitrary URLs.
         avatarUrl: z
-          .url({ protocol: /^https$/, hostname: /^avatars\.githubusercontent\.com$/ })
+          .url({ protocol: /^https$/, hostname: GITHUB_AVATAR_HOST })
           .optional(),
       }),
     )
@@ -137,7 +140,9 @@ export const PrCardProps = z.object({
   additions: z.number().int().nonnegative().optional(),
   deletions: z.number().int().nonnegative().optional(),
   // Links only to github.com over https.
-  url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+  url: z.url({ protocol: /^https$/, hostname: GITHUB_WEB_HOST }).optional(),
+  /** The server flagged the title as a possible prompt injection (shown as a warning badge). */
+  injection: z.boolean().optional(),
 });
 
 export const PrListProps = z.object({
@@ -243,7 +248,7 @@ export const PrReviewProps = z.object({
   pr: z.object({
     number: z.number().int().positive(),
     title: z.string().min(1).max(256),
-    url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }),
+    url: z.url({ protocol: /^https$/, hostname: GITHUB_WEB_HOST }),
     state: z.enum(['open', 'draft', 'merged', 'closed']),
     author: githubLogin.optional(),
     branch: z.string().max(255),
@@ -266,11 +271,16 @@ export const PrReviewProps = z.object({
   /** GitHub refuses Approve / Request changes on your own pull request. */
   allowedEvents: z.array(ReviewEvent).min(1).max(3),
   eventNote: z.string().max(200).optional(),
+  /**
+   * Set by the server when the PR description reads like a prompt injection: the
+   * flagged sentence (untrusted text, shown as text). Never from the model.
+   */
+  injectionWarning: z.string().max(200).optional(),
   status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
   /** After a decision: the comment ids that were posted. */
   selected: z.array(z.number().int().positive()).max(20).optional(),
   result: z.string().max(400).optional(),
-  reviewUrl: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+  reviewUrl: z.url({ protocol: /^https$/, hostname: GITHUB_WEB_HOST }).optional(),
 });
 
 /** What the user changed in a PrReview before submitting (sent with the approval). */
@@ -326,7 +336,7 @@ export const ReleaseFormProps = z.object({
   status: z.enum(['pending', 'running', 'approved', 'rejected', 'failed']).default('pending'),
   selected: z.array(z.number().int().positive()).max(1).optional(),
   result: z.string().max(400).optional(),
-  releaseUrl: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional(),
+  releaseUrl: z.url({ protocol: /^https$/, hostname: GITHUB_WEB_HOST }).optional(),
 });
 
 /** What the user changed in a ReleaseForm before publishing. */

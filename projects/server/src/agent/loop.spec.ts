@@ -37,7 +37,7 @@ function setup(provider: LlmProvider, overrides: Partial<AgentDeps> = {}) {
     tools: buildToolDefs(),
     executors: { ...executors, list_pull_requests: prs },
     actions: {},
-    ctx: { github: {} as never, allowlist: ['octo/demo'] },
+    ctx: { github: {} as never, repo: 'octo/demo' },
     emit: (e) => events.push(e),
     runId: 'r1',
     ...overrides,
@@ -174,6 +174,46 @@ describe('runAgent', () => {
     expect(received).toEqual({ state: 'open', limit: 20 });
   });
 
+  it('sends the model the last 6 turns and a summary of older ones, but keeps the whole thread', async () => {
+    const model = scripted();
+    const { run, thread } = setup(model);
+    for (let n = 1; n <= 7; n++) await run(`question ${n}`);
+
+    const last = model.requests.at(-1)!;
+    expect(last.messages[0]).toEqual({ role: 'user', text: 'question 2' });
+    expect(last.messages.filter((m) => m.role === 'user')).toHaveLength(6);
+    expect(last.system).toContain('Earlier in this conversation');
+    expect(last.system).toContain('- User: "question 1" → agent: "done"');
+    expect(thread.filter((m) => m.role === 'user')).toHaveLength(7);
+  });
+
+  it('reminds the model once when it replies with nothing, and the user gets its real answer', async () => {
+    const model = scripted({ text: '' }, { text: 'It is a small Angular app with 8 open PRs.' });
+    const { run, events, thread } = setup(model);
+    await run('give details about this repo');
+
+    expect(model.requests).toHaveLength(2);
+    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('Your last reply was empty') });
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['It is a small Angular app with 8 open PRs.']);
+    expect(thread.at(-1)).toMatchObject({ role: 'assistant', text: 'It is a small Angular app with 8 open PRs.' });
+  });
+
+  it('says so instead of showing nothing when the model stays empty', async () => {
+    const model = scripted({ text: '' }, { text: '  ' });
+    const { run, events } = setup(model);
+    expect(await run('give details about this repo')).toEqual({ status: 'done' });
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual([expect.stringContaining('could not produce an answer')]);
+    expect(model.requests).toHaveLength(2);
+  });
+
+  it('does not nag when a tool already showed the answer', async () => {
+    const model = scripted({ toolCalls: [{ id: 'c1', name: 'list_pull_requests', args: {} }] }, { text: '' });
+    const { run, events } = setup(model);
+    await run('Show my open PRs');
+    expect(model.requests).toHaveLength(2);
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT')).toEqual([]);
+  });
+
   it('stops after the iteration limit', async () => {
     const loop = { toolCalls: [{ id: 'c', name: 'list_pull_requests', args: {} }] };
     const { events, run } = setup(scripted(loop, loop, loop, loop), { maxIterations: 3 });
@@ -221,6 +261,52 @@ const cards = (events: AgentEvent[]) =>
   ofType(events, 'CUSTOM')
     .filter((e) => e.name === 'ui' && e.value.node.component === 'ApprovalCard')
     .map((e) => (e.value as { node: { props: Record<string, unknown> } }).node.props);
+
+describe('client tools', () => {
+  it('validates the input and hands the call to the browser, without an executor', async () => {
+    const model = scripted(
+      { toolCalls: [{ id: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }] },
+      { text: 'The rate limit is set on lines 12–18.' },
+    );
+    const { run, events } = setup(model);
+    await run('take me to the auth changes');
+
+    const sent = ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool');
+    expect(sent.map((e) => e.value)).toEqual([{ callId: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }]);
+    expect(ofType(events, 'STEP_FINISHED').find((e) => e.stepId.includes('h1'))).toMatchObject({ status: 'done', detail: 'src/auth/login.js:12–18' });
+    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', results: [{ content: { sentToApp: true } }] });
+  });
+
+  it('never sends invalid client tool input to the browser', async () => {
+    const model = scripted({ toolCalls: [{ id: 'n1', name: 'navigate_to', args: { page: 'pull_request' } }] }, { text: 'Sorry.' });
+    const { run, events } = setup(model);
+    await run('open the PR');
+    expect(ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool')).toEqual([]);
+    expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('needs a number');
+  });
+});
+
+describe('side questions while a change waits (readOnly)', () => {
+  it('refuses any change in code, without a dry run', async () => {
+    const { tool, calls } = fakeAction();
+    const model = scripted({ toolCalls: [closeCall()] }, { text: 'It has to wait.' });
+    const { run, events } = setup(model, { actions: { bulk_update_issues: tool }, readOnly: true });
+
+    expect(await run('also close #118')).toEqual({ status: 'done' });
+    expect(calls.plan).toBe(0);
+    expect(cards(events)).toEqual([]);
+    expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('Another change is waiting');
+  });
+
+  it('owes no review draft in a side question', async () => {
+    const model = scripted({ text: 'Lines 12–18.' });
+    const { tool, calls } = fakeAction();
+    const { run } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16, readOnly: true });
+    expect(await run('Review where the key is built')).toEqual({ status: 'done' });
+    expect(calls.plan).toBe(0);
+    expect(model.requests).toHaveLength(1);
+  });
+});
 
 describe('approval gate', () => {
   it('pauses a destructive call on an approval card without changing anything', async () => {
@@ -410,23 +496,76 @@ describe('review fallback (PR review page)', () => {
     return { tool: wrapped, inputs, calls };
   }
 
-  it('drafts a summary-only review when the model stops without one, and reports the outcome as a note', async () => {
-    const model = scripted({ text: 'It adds an API reference to docs/api.md.' }, { text: 'Review posted.' });
+  it('reminds the model once, then drafts a summary-only review from its first reply, and reports the outcome as a note', async () => {
+    const model = scripted({ text: 'It adds an API reference to docs/api.md.' }, { text: 'Sorry.' }, { text: 'Review posted.' });
     const { tool, inputs, calls } = reviewAction();
-    const { run, thread, deps } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16 });
+    const { run, thread, deps, events } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16 });
 
     const outcome = await run('Review pull request #16');
     expect(outcome.status).toBe('awaiting-approval');
     const pending = (outcome as { pending: PendingApproval }).pending;
     expect(pending.synthetic).toBe(true);
     expect(inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'It adds an API reference to docs/api.md.', comments: [] }]);
-    // No fake tool call in the history: the thread ends on the model's own reply.
-    expect(thread.map((m) => m.role)).toEqual(['user', 'assistant']);
+    // The reminder is the only app message; no fake tool call in the history.
+    expect(thread.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(thread[2]).toMatchObject({ text: expect.stringContaining('submit_pull_request_review was not called') });
+    // The reply before the reminder is held back (it may claim a draft that does not exist).
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['Sorry.']);
 
     const resumed = await resumeAgent(thread, pending, { approve: true, selected: [] }, deps);
     expect(resumed).toEqual({ status: 'done' }); // no second draft after the decision
     expect(calls.execute).toHaveLength(1);
-    expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('[RepoPilot app]') });
+    expect(model.requests[2].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('[RepoPilot app]') });
+  });
+
+  it('lets the model draft the real review after the reminder, without showing its false claim', async () => {
+    const model = scripted(
+      { text: 'I have drafted a review for pull request #16.' },
+      { toolCalls: [{ id: 'r1', name: 'submit_pull_request_review', args: { number: 16, event: 'COMMENT', summary: 'Docs only.', comments: [] } }] },
+    );
+    const { tool, inputs } = reviewAction();
+    const { run, events } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16 });
+
+    const outcome = await run('Review pull request #16');
+    expect(outcome.status).toBe('awaiting-approval');
+    expect((outcome as { pending: PendingApproval }).pending.synthetic).toBeUndefined();
+    expect(inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'Docs only.', comments: [] }]);
+    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).not.toContain('I have drafted a review for pull request #16.');
+  });
+
+  it('owes a review in Ask too, when the user asks for one and the run read exactly one pull request', async () => {
+    const readPr: Executor<any> = async (input: { number: number }) => ({ data: { number: input.number, files: [] }, detail: 'read' });
+    const read = { toolCalls: [{ id: 'g1', name: 'get_pull_request', args: { number: 16 } }] };
+
+    const asked = reviewAction();
+    const ask = setup(scripted(read, { text: 'Looks fine.' }, { text: 'Done.' }), {
+      executors: { ...executors, get_pull_request: readPr },
+      actions: { submit_pull_request_review: asked.tool },
+    });
+    expect((await ask.run('Can you review PR #16?')).status).toBe('awaiting-approval');
+    expect(asked.inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'Looks fine.', comments: [] }]);
+
+    // Reading a pull request without asking for a review drafts nothing.
+    const notAsked = reviewAction();
+    const look = setup(scripted(read, { text: 'It adds docs.' }), {
+      executors: { ...executors, get_pull_request: readPr },
+      actions: { submit_pull_request_review: notAsked.tool },
+    });
+    expect(await look.run('What does PR #16 change?')).toEqual({ status: 'done' });
+    expect(notAsked.inputs).toEqual([]);
+  });
+
+  it('still drafts the review when the model fails after the reminder', async () => {
+    const model = scripted({ text: 'Adds docs.' });
+    model.generate = (async (req: LlmRequest) => {
+      model.requests.push(req);
+      if (model.requests.length > 1) throw new LlmError('overloaded', true, 503);
+      return { text: 'Adds docs.', toolCalls: [], model: 'fake-1' };
+    }) as typeof model.generate;
+    const { tool, inputs } = reviewAction();
+    const { run } = setup(model, { actions: { submit_pull_request_review: tool }, reviewPullRequest: 16 });
+    expect((await run('Review pull request #16')).status).toBe('awaiting-approval');
+    expect(inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'Adds docs.', comments: [] }]);
   });
 
   it('does not draft one when the run is not a PR review', async () => {

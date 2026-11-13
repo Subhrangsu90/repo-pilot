@@ -1,4 +1,5 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
+import { valueOf } from './resource';
 import type { ModelOption } from '@repopilot/shared';
 import { ServerStatus } from './server-status';
 
@@ -24,7 +25,7 @@ export class ModelChoice {
   private readonly picked = signal<ModelOption | null>(readStored());
 
   private readonly serverDefault = computed<ModelOption>(() =>
-    this.status.health.value()?.llm.provider === 'ollama' ? 'local' : 'cloud',
+    valueOf(this.status.health)?.llm?.provider === 'ollama' ? 'local' : 'cloud',
   );
 
   /** What the switch shows. */

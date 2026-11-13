@@ -5,6 +5,8 @@ import type { ModelOption } from '@repopilot/shared';
 import { filter, map } from 'rxjs';
 import { ModelChoice } from '../core/model-choice';
 import { ServerStatus } from '../core/server-status';
+import { Auth } from '../core/auth';
+import { RepoPicker } from '../shared/ui/repo-picker';
 import { REGISTRY } from '../genui/registry';
 import { GENUI_REGISTRY } from '../genui/registry-token';
 import { Theme } from '../core/theme';
@@ -22,12 +24,11 @@ interface NavItem {
 /**
  * The six links of the Screen Spec, in its order. Pull requests, Issues,
  * Releases, History and Audit log get a `path` as each page is built.
- * (/playground is a dev tool and deliberately not in the menu.)
  */
 const NAV: NavItem[] = [
   { label: 'Ask', icon: 'ask', path: '/ask' },
   { label: 'Pull requests', icon: 'pull-request', path: '/pulls', count: 'pulls' },
-  { label: 'Issues', icon: 'issue', count: 'issues' },
+  { label: 'Issues', icon: 'issue', path: '/issues', count: 'issues' },
   { label: 'Releases', icon: 'release', path: '/releases' },
   { label: 'History', icon: 'history', path: '/history' },
   { label: 'Audit log', icon: 'audit', path: '/audit' },
@@ -46,7 +47,7 @@ const MODELS: { value: ModelOption; label: string }[] = [
  */
 @Component({
   selector: 'app-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, Logo],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, Logo, RepoPicker],
   // The component catalog loads with the app pages, not with the landing page.
   providers: [{ provide: GENUI_REGISTRY, useValue: REGISTRY }],
   host: { class: 'flex min-h-dvh flex-col min-[780px]:flex-row' },
@@ -57,13 +58,7 @@ const MODELS: { value: ModelOption; label: string }[] = [
     >
       <a routerLink="/" class="self-start rounded-sm px-2 py-1" aria-label="RepoPilot home"><app-logo /></a>
 
-      @if (status.repo(); as repo) {
-        <!-- Repo switcher: one allowlisted repo for now, so there is no menu yet. -->
-        <p class="flex min-h-11 items-center justify-between gap-2 rounded-md border border-border-strong bg-bg px-3 font-mono text-body-sm text-fg">
-          <span><span class="sr-only">Repository: </span>{{ repo.name }}</span>
-          <app-icon name="chevron-down" [size]="16" class="text-fg-muted" />
-        </p>
-      }
+      <app-repo-picker [compact]="true" />
 
       <ul class="flex flex-col gap-1">
         @for (item of nav; track item.label) {
@@ -114,6 +109,23 @@ const MODELS: { value: ModelOption; label: string }[] = [
             }
           </div>
         }
+        @if (auth.user(); as u) {
+          <a
+            routerLink="/settings"
+            routerLinkActive="bg-surface-3 text-fg"
+            ariaCurrentWhenActive="page"
+            class="flex min-h-11 items-center gap-2.5 rounded-sm px-2 text-body-sm text-fg-muted hover:text-fg"
+            aria-label="Profile and settings"
+          >
+            @if (status.viewer()?.avatarUrl; as avatar) {
+              <img [src]="avatar" alt="" width="24" height="24" class="size-6 shrink-0 rounded-full bg-surface-3" referrerpolicy="no-referrer" />
+            } @else {
+              <span class="grid size-6 shrink-0 place-items-center rounded-full bg-surface-3 text-caption font-semibold uppercase" aria-hidden="true">{{ u.login.slice(0, 2) }}</span>
+            }
+            <span class="min-w-0 flex-1 truncate font-mono">{{ u.login }}</span>
+            <span class="shrink-0 text-caption text-fg-faint">Settings</span>
+          </a>
+        }
         <button type="button" class="btn btn-ghost justify-start px-3" (click)="theme.toggle()">
           <app-icon [name]="theme.current() === 'graphite' ? 'sun' : 'moon'" />
           {{ theme.current() === 'graphite' ? 'Light theme' : 'Graphite theme' }}
@@ -130,6 +142,8 @@ export class Shell {
   protected readonly status = inject(ServerStatus);
   protected readonly model = inject(ModelChoice);
   protected readonly theme = inject(Theme);
+  protected readonly auth = inject(Auth);
+
   protected readonly nav = NAV;
   protected readonly models = MODELS;
 

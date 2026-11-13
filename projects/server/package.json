@@ -8,7 +8,6 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "check": "tsx src/check-env.ts",
-    "seed:demo": "tsx src/seed-demo.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",

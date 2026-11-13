@@ -1,5 +1,6 @@
-import { Component, computed, input, signal } from '@angular/core';
+import { Component, computed, effect, ElementRef, inject, input, signal, untracked } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
+import { ClientTools } from '../../core/client-tools';
 
 type Props = PropsOf<'DiffViewer'>;
 type Line = Props['lines'][number];
@@ -39,7 +40,19 @@ type Comment = Props['comments'][number];
             @if (line.kind === 'hunk') {
               <div class="bg-surface-1 px-4 py-1 whitespace-pre text-fg-muted">{{ line.text }}</div>
             } @else {
-              <div class="flex" [class.bg-success-soft]="line.kind === 'add'" [class.bg-danger-soft]="line.kind === 'del'">
+              @let lit = isLit(line);
+              <div
+                class="flex"
+                [class.bg-success-soft]="line.kind === 'add'"
+                [class.bg-danger-soft]="line.kind === 'del'"
+                [class.outline-2]="lit"
+                [class.-outline-offset-2]="lit"
+                [class.outline-fg]="lit"
+                [attr.data-highlighted]="lit ? '' : null"
+              >
+                @if (lit) {
+                  <span class="sr-only">Highlighted by the agent. </span>
+                }
                 <span class="w-13 shrink-0 pr-3 text-right text-fg-faint select-none" aria-hidden="true">{{ number(line) }}</span>
                 <span
                   class="w-5 shrink-0 select-none"
@@ -107,6 +120,38 @@ export class DiffViewer {
   protected readonly editing = signal<number | null>(null);
   protected readonly draft = signal('');
 
+  private readonly clientTools = inject(ClientTools);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  /** The agent's highlight_lines request, when it is for this file and its lines are in this diff. */
+  protected readonly lit = computed(() => {
+    const h = this.clientTools.highlight();
+    const p = this.props();
+    if (!h || !samePath(h.path, p.path)) return null;
+    const hit = p.lines.some((l) => l.kind !== 'hunk' && l.kind !== 'del' && l.new !== undefined && l.new >= h.from && l.new <= h.to);
+    return hit ? h : null;
+  });
+
+  constructor() {
+    // Claim the highlight and bring its first line into view.
+    effect(() => {
+      const h = this.lit();
+      if (!h) return;
+      untracked(() => {
+        this.clientTools.shown(h.seq);
+        setTimeout(() => {
+          const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+          this.host.nativeElement.querySelector('[data-highlighted]')?.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+        });
+      });
+    });
+  }
+
+  protected isLit(line: Line): boolean {
+    const h = this.lit();
+    return !!h && line.kind !== 'hunk' && line.kind !== 'del' && line.new !== undefined && line.new >= h.from && line.new <= h.to;
+  }
+
   /** Comments by the new-file line they sit under. */
   protected readonly commentsAt = computed(() => {
     const map = new Map<number, Comment[]>();
@@ -133,4 +178,10 @@ export class DiffViewer {
   protected remove(id: number) {
     this.emit()?.({ component: 'DiffViewer', name: 'comment-remove', payload: { id } });
   }
+}
+
+/** "./src/auth/login.js" and "src/auth/login.js" are the same file. */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => p.trim().replace(/^\.?\//, '');
+  return norm(a) === norm(b);
 }

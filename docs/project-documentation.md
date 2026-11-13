@@ -59,7 +59,7 @@ Ten features, each tied to a pattern and triggered by a plain-English prompt. Fe
 | # | Feature | Example prompt | Pattern | Rendered with |
 | --- | --- | --- | --- | --- |
 | 1 | PR overview | "Show my open PRs" | Tool-based GenUI | `PrList` |
-| 2 | Repo health report | "Give me a health report of repopilot-demo" | Declarative GenUI | `Grid` + `StatCard` + `ActivityChart` + `IssueTable` + `ContributorList` |
+| 2 | Repo health report | "Give me a health report of this repo" | Declarative GenUI | `Grid` + `StatCard` + `ActivityChart` + `IssueTable` + `ContributorList` |
 | 3 | Bulk issue cleanup | "Close all wontfix issues older than 90 days" | Human-in-the-loop + dry-run | `ApprovalCard` with selectable items |
 | 4 | Drafted issue or PR | "Open a PR from feature/login with a good description" | Shared state | `FormSurface` → `ApprovalCard` |
 | 5 | Live progress | Any multi-step request | Streaming steps | `StepTimeline` |
@@ -447,7 +447,7 @@ The safety model has three layers: the token never leaves the server, the model 
 
 - Sign in with GitHub OAuth. The server exchanges the code for a token and stores it in an encrypted, httpOnly session; the browser only ever holds a session cookie.
 - Request the least privilege needed. A GitHub App with fine-grained repository permissions (Issues, Pull requests, Contents, Actions: read; write only where tools need it) is better than a classic token with broad `repo` scope.
-- Limit the demo to an allowlist of repositories, starting with a dedicated `repopilot-demo` repo.
+- The agent works only on the repository the user picked in the app; a name the model makes up (or that repository content suggests) is refused in code.
 
 ### Threats and mitigations
 
@@ -520,7 +520,7 @@ A 3-minute live demo shows three patterns; the talking points show the engineeri
 ### 3-minute demo
 
 1. **(0:00–0:30) Setup.** "RepoPilot lets you manage GitHub in plain English. The agent answers with real Angular components, not text."
-2. **(0:30–1:15) Declarative GenUI.** Type "Give me a health report of repopilot-demo". The step timeline runs, then a dashboard appears. Follow up with "only show bugs" and the table filters in place.
+2. **(0:30–1:15) Declarative GenUI.** Type "Give me a health report of this repo". The step timeline runs, then a dashboard appears. Follow up with "only show bugs" and the table filters in place.
 3. **(1:15–2:15) Human-in-the-loop.** Type "Close all wontfix issues older than 90 days". The approval card lists 12 issues; deselect one, approve, then open the audit log and click Undo.
 4. **(2:15–3:00) Shared state + frontend tools.** Type "Review PR #42". Inline comments appear on the diff. Edit one comment, then ask "take me to the auth changes" and the app scrolls and highlights the lines.
 

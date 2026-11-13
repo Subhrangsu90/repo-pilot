@@ -1,5 +1,5 @@
 import { afterNextRender, afterRenderEffect, Component, computed, ElementRef, input, linkedSignal, signal, viewChild } from '@angular/core';
-import { EmitFn, PropsOf, ReleaseEdits } from '@repopilot/shared';
+import { EmitFn, githubUrl, PropsOf, ReleaseEdits } from '@repopilot/shared';
 import { Icon } from '../../shared/ui/icon';
 
 type Props = PropsOf<'ReleaseForm'>;
@@ -326,7 +326,7 @@ export class ReleaseForm {
 
   protected prUrl(n: number): string | null {
     const repo = this.props().repo;
-    return REPO.test(repo) ? `https://github.com/${repo}/pull/${n}` : null;
+    return REPO.test(repo) ? githubUrl.pullRequest(repo, n) : null;
   }
 
   protected removeEntry(key: SectionKey, index: number) {

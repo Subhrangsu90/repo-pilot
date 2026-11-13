@@ -20,6 +20,16 @@ export interface UndoOutcome {
   result: string;
 }
 
+/** Records the repository in the inverse, so Undo acts there whatever repo is selected later. */
+export function pinRepo(inverse: Inverse, repo: string): Inverse {
+  return inverse.kind === 'issues' ? { ...inverse, input: { ...inverse.input, repo } } : { ...inverse, repo };
+}
+
+/** The repository an inverse acts on, when it was recorded (entries from before week 4 may lack it). */
+export function inverseRepo(inverse: Inverse): string | undefined {
+  return (inverse.kind === 'issues' ? inverse.input.repo : inverse.repo) || undefined;
+}
+
 export async function runInverse(inverse: Inverse, ctx: ToolContext): Promise<UndoOutcome> {
   switch (inverse.kind) {
     case 'issues': {

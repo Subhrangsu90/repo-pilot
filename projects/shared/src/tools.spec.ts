@@ -1,5 +1,4 @@
 import { findInternalComponent, validateNode } from './catalog';
-import { prList } from './fixtures';
 import { bulkUpdateIssues, listIssues, listPullRequests, needsApproval, toolSpecs } from './tools';
 
 describe('findInternalComponent', () => {
@@ -60,7 +59,11 @@ describe('tool inputs', () => {
 });
 
 describe('PR components', () => {
-  it('accept the PrList fixture, including bot authors', () => {
+  it('accept a PrList, including bot authors', () => {
+    const prList = {
+      component: 'PrList',
+      props: { items: [{ number: 17, title: 'Bump deps', author: 'dependabot[bot]', state: 'open', ci: 'failure', ageDays: 19 }] },
+    };
     expect(validateNode(prList)).toMatchObject({ ok: true });
   });
 

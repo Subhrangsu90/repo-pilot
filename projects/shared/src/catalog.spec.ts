@@ -1,17 +1,16 @@
 import { catalog, CatalogEntry, componentNames, validateNode } from './catalog';
 import { buildCatalogPromptDoc } from './prompt';
-import {
-  fixtures,
-  healthReport,
-  invalidProps,
-  issuePicker,
-  partiallyBroken,
-  unknownComponent,
-} from './fixtures';
+
+/** Sample agent output, inline: valid nodes must pass, broken ones show how bad output is contained. */
+const statGrid = { component: 'Grid', props: { columns: 2, children: [{ component: 'StatCard', props: { label: 'Open PRs', value: 7 } }, { component: 'StatCard', props: { label: 'Stale PRs', value: 3, tone: 'warning' } }] } };
+const issuePicker = { component: 'IssueTable', props: { selectable: true, rows: [{ number: 15, title: 'Dark mode', state: 'open', labels: ['wontfix'], ageDays: 118 }] } };
+const partiallyBroken = { component: 'Grid', props: { columns: 3, children: [{ component: 'StatCard', props: { label: 'Open PRs', value: 7 } }, { component: 'StatCard', props: { label: 'Missing value' } }] } };
+const unknownComponent = { component: 'ScriptInjector', props: { html: '<img src=x onerror="alert(1)">' } };
+const invalidProps = { component: 'StatCard', props: { label: 'Open PRs', value: 7, tone: 'rainbow' } };
 
 describe('validateNode', () => {
-  it('accepts every valid fixture', () => {
-    for (const node of [healthReport, issuePicker, partiallyBroken]) {
+  it('accepts valid nodes; a bad child is validated where it is rendered', () => {
+    for (const node of [statGrid, issuePicker, partiallyBroken]) {
       expect(validateNode(node)).toMatchObject({ ok: true });
     }
   });
@@ -97,13 +96,6 @@ describe('validateNode', () => {
     const circular: Record<string, unknown> = { component: 'Nope' };
     circular['props'] = circular;
     expect(() => validateNode(circular)).not.toThrow();
-  });
-});
-
-describe('fixtures', () => {
-  it('have unique ids', () => {
-    const ids = fixtures.map((f) => f.id);
-    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 

@@ -37,17 +37,20 @@ const ConfigSchema = z.object({
   DATABASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
 
   GITHUB_TOKEN: z.string().optional(),
-  GITHUB_REPO_ALLOWLIST: z
-    .string()
-    .default('')
-    .transform((s) =>
-      s
-        .split(',')
-        .map((r) => r.trim())
-        .filter(Boolean),
-    ),
+  // "Sign in with GitHub" (auth/index.ts). All three set → OAuth mode: each user acts with their own
+  // token, kept in a sealed httpOnly cookie. Unset → dev mode: everyone acts as GITHUB_TOKEN's owner.
+  // Empty values (as in .env.example) mean "not set".
+  GITHUB_OAUTH_CLIENT_ID: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  GITHUB_OAUTH_CLIENT_SECRET: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  SESSION_SECRET: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(32, 'SESSION_SECRET must be at least 32 characters').optional()),
+  // OAuth App scopes. repo: public and private repositories (an OAuth App cannot narrow this per
+  // repository; every change still needs the user's approval). public_repo: public ones only.
+  GITHUB_OAUTH_SCOPE: z.string().default('repo'),
+  // Where the browser opens the app; the OAuth callback URL is APP_URL/api/auth/callback.
+  APP_URL: z.url().default('http://localhost:4200').transform((u) => u.replace(/\/+$/, '')),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
 
 export const config: Config = ConfigSchema.parse(process.env);
+

@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@repopilot/shared';
-import { applyEvent, newTurn, replayRuns, Turn, visibleSurfaces } from './agent-run';
+import { applyEvent, clearFilter, filterTables, newTurn, replayRuns, Turn, visibleSurfaces } from './agent-run';
 import { dayDiff, formatWhen } from './api';
 
 const fold = (events: AgentEvent[]): Turn => events.reduce(applyEvent, newTurn('t1', 'Show my open PRs'));
@@ -140,6 +140,69 @@ describe('replayRuns (History → Resume)', () => {
     ]);
     expect(turns[0].text).toBe('Closed 2 issues.');
     expect(turns[0].steps.find((s) => s.id === 'approval-c1')?.status).toBe('done');
+  });
+});
+
+describe('apply_table_filter (filterTables)', () => {
+  const row = (number: number, labels: string[], state = 'open', author = 'octocat') => ({ number, title: `#${number}`, state, labels, author, assignees: [], ageDays: 1 });
+  const health = {
+    component: 'Section',
+    props: {
+      title: 'Health report',
+      children: [
+        { component: 'Grid', props: { columns: 4, children: [{ component: 'StatCard', props: { label: 'Open', value: 3 } }] } },
+        { component: 'IssueTable', props: { title: 'Oldest open issues', rows: [row(3, ['bug']), row(4, ['enhancement']), row(5, ['Bug', 'good first issue'])] } },
+      ],
+    },
+  };
+  const filterEvent = (args: Record<string, unknown>): AgentEvent => ({ type: 'CUSTOM', name: 'client_tool', value: { callId: 'f', name: 'apply_table_filter', args } });
+  const rowsOf = (t: Turn[]) => ((t[0].surfaces[0].node.props as typeof health.props).children[1].props as { rows: { number: number }[] }).rows.map((r) => r.number);
+
+  it('filters the table inside the latest surface in place, case-insensitively, and Clear restores it', () => {
+    const turns = [fold([{ type: 'CUSTOM', name: 'ui', value: { surfaceId: 'h', node: health } } as AgentEvent])];
+    const filtered = filterTables(turns, { target: 'IssueTable', labels: ['bug'] });
+    expect(rowsOf(filtered)).toEqual([3, 5]);
+    expect(filtered[0].surfaces[0]).toMatchObject({ surfaceId: 'h', filter: 'bug', base: health });
+    // The rest of the report is untouched.
+    expect((filtered[0].surfaces[0].node.props as typeof health.props).children[0]).toEqual(health.props.children[0]);
+
+    // A new filter starts from the fetched rows, not from the filtered ones.
+    expect(rowsOf(filterTables(filtered, { target: 'IssueTable', labels: ['enhancement'] }))).toEqual([4]);
+    expect(clearFilter(filtered, 'h')[0].surfaces[0]).toEqual({ surfaceId: 'h', node: health });
+    expect(filterTables(filtered, { target: 'IssueTable', clear: true })[0].surfaces[0]).toEqual({ surfaceId: 'h', node: health });
+  });
+
+  it('looks back across turns for the table, and leaves everything alone when none is shown', () => {
+    const prs = { component: 'PrList', props: { items: [row(15, [], 'open'), row(16, [], 'draft')] } };
+    const turns = [fold([{ type: 'CUSTOM', name: 'ui', value: { surfaceId: 'p', node: prs } } as AgentEvent]), newTurn('t2', 'just the drafts')];
+    const out = filterTables(turns, { target: 'PrList', state: 'draft' });
+    expect((out[0].surfaces[0].node.props as { items: { number: number }[] }).items.map((i) => i.number)).toEqual([16]);
+    expect(out[0].surfaces[0].filter).toBe('draft');
+    expect(filterTables(turns, { target: 'IssueTable', labels: ['bug'] })).toBe(turns);
+  });
+
+  it('replays filters from History, and a resumed run continues the turn that waited even after a side question', () => {
+    const turns = replayRuns([
+      { id: 'r1', prompt: 'Health report', events: [{ type: 'CUSTOM', name: 'ui', value: { surfaceId: 'h', node: health } }, { type: 'RUN_FINISHED', threadId: 't', runId: 'r1' }] as AgentEvent[] },
+      { id: 'r2', prompt: 'Only show bugs', events: [filterEvent({ target: 'IssueTable', labels: ['bug'] }), { type: 'RUN_FINISHED', threadId: 't', runId: 'r2' }] },
+      {
+        id: 'r3',
+        prompt: 'Close #4',
+        events: [
+          { type: 'CUSTOM', name: 'approval', value: { runId: 'r3', toolCallId: 'c1', surfaceId: 's1' } },
+          { type: 'RUN_FINISHED', threadId: 't', runId: 'r3' },
+        ] as AgentEvent[],
+      },
+      { id: 'r4', prompt: 'Where is the bug?', events: [{ type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'Line 12.' }, { type: 'RUN_FINISHED', threadId: 't', runId: 'r4' }] as AgentEvent[] },
+      { id: 'r5', prompt: null, events: [{ type: 'TEXT_MESSAGE_CONTENT', messageId: 'm2', delta: 'Closed #4.' }, { type: 'RUN_FINISHED', threadId: 't', runId: 'r5' }] as AgentEvent[] },
+    ]);
+    expect(rowsOf(turns)).toEqual([3, 5]);
+    expect(turns.map((t) => [t.prompt, t.status, t.text])).toEqual([
+      ['Health report', 'done', ''],
+      ['Only show bugs', 'done', ''],
+      ['Close #4', 'done', 'Closed #4.'],
+      ['Where is the bug?', 'done', 'Line 12.'],
+    ]);
   });
 });
 

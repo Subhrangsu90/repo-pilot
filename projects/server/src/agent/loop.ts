@@ -1,6 +1,7 @@
-import { AgentEvent, getToolSpec, needsApproval, PropsOf, submitPullRequestReview, toolStepId, validateNode } from '@repopilot/shared';
+import { AgentEvent, getPullRequest, getToolSpec, needsApproval, PropsOf, submitPullRequestReview, toolStepId, validateNode } from '@repopilot/shared';
 import type { ChatMessage, LlmProvider, LlmToolDef, ToolCall, ToolResult } from '../llm';
 import type { ActionTool } from '../tools/actions';
+import { contextWindow, withSummary } from './context';
 import type { Inverse } from '../tools/undo';
 import { Executor, ToolContext, ToolError } from '../tools/read-tools';
 
@@ -23,6 +24,12 @@ export interface AgentDeps {
    * so the page always ends on a review the user can edit and submit.
    */
   reviewPullRequest?: number;
+  /**
+   * A side question while another change waits for approval: only read and
+   * client tools run; any change is refused in code, so the waiting card stays
+   * the only pending change.
+   */
+  readOnly?: boolean;
   /** Called once per executed (or failed) approved change: the audit log. Errors are swallowed. */
   onExecuted?: (change: ExecutedChange) => Promise<void> | void;
 }
@@ -100,8 +107,11 @@ const RESULT_LIMIT = 20_000;
  */
 export async function runAgent(thread: ChatMessage[], prompt: string, deps: AgentDeps): Promise<AgentOutcome> {
   thread.push({ role: 'user', text: prompt });
-  return loop(thread, deps, false);
+  return loop(thread, deps, false, REVIEW_REQUEST.test(prompt));
 }
+
+/** A prompt that asks for a review ("Review PR #16", "can you review #15?"). */
+const REVIEW_REQUEST = /\breview/i;
 
 /**
  * Carries out the user's decision on a paused call, gives the model the
@@ -130,7 +140,11 @@ export async function resumeAgent(
   return loop(thread, { ...deps, reviewPullRequest: undefined }, true);
 }
 
-async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boolean): Promise<AgentOutcome> {
+/**
+ * @param reviewOnRead The user asked for a review: if the run reads exactly one
+ *   pull request, it must end on a review draft of it, as on the PR review page.
+ */
+async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boolean, reviewOnRead = false): Promise<AgentOutcome> {
   const { emit, provider } = deps;
   const max = deps.maxIterations ?? 6;
   let uiShown = uiShownBefore;
@@ -143,10 +157,20 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
       emit(event);
     },
   };
+  const readPulls = new Set<number>();
+  /** The pull request this run owes a review draft for, if any. */
+  const reviewTarget = (): number | undefined =>
+    deps.reviewPullRequest ?? (reviewOnRead && readPulls.size === 1 ? [...readPulls][0] : undefined);
+  const reviewOwed = () => !deps.readOnly && reviewTarget() !== undefined && !reviewShown && !deps.signal?.aborted;
+  /** The model's last words before it was reminded to draft the review. */
+  let beforeNudge: string | undefined;
+  /** The model was reminded once that its reply was empty. */
+  let emptyNudged = false;
+
   /** The model is finished: end the run, or first draft the review it did not write. */
   const finish = async (text: string): Promise<AgentOutcome> => {
-    if (deps.reviewPullRequest === undefined || reviewShown || deps.signal?.aborted) return { status: 'done' };
-    const pending = await draftReview(deps, deps.reviewPullRequest, text);
+    if (!reviewOwed()) return { status: 'done' };
+    const pending = await draftReview(deps, reviewTarget()!, beforeNudge || text);
     return pending ? { status: 'awaiting-approval', pending } : { status: 'done' };
   };
 
@@ -155,9 +179,18 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
     emit({ type: 'STEP_STARTED', stepId: thinkId, stepName: i === 0 && !uiShownBefore ? 'Understanding the request' : 'Reviewing results' });
     let reply;
     try {
-      reply = await provider.generate({ system: deps.system, messages: thread, tools: deps.tools, signal: deps.signal });
+      // The last turns in full, older ones as a summary; the thread itself keeps everything.
+      const context = contextWindow(thread);
+      reply = await provider.generate({
+        system: withSummary(deps.system, context.summary),
+        messages: context.messages,
+        tools: deps.tools,
+        signal: deps.signal,
+      });
     } catch (err) {
       emit({ type: 'STEP_FINISHED', stepId: thinkId, status: 'error', detail: (err as Error).message.slice(0, 200) });
+      // The model went down after its reminder: the review it owes is still drafted, from its earlier reply.
+      if (beforeNudge !== undefined && reviewOwed()) return finish(beforeNudge);
       // Real data is already on screen: degrade to "no summary" instead of failing the run.
       if (uiShown && !deps.signal?.aborted) {
         const note = 'The results above are complete, but the model could not write a summary right now (it is overloaded or out of quota).';
@@ -170,14 +203,45 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
     emit({ type: 'STEP_FINISHED', stepId: thinkId, status: 'done', detail: reply.model });
 
     thread.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw });
+    // Stopped without the review it was asked for: remind it once, in code. Its reply is held back,
+    // since small models often claim "I have drafted a review" without calling the tool.
+    if (reply.toolCalls.length === 0 && beforeNudge === undefined && reviewOwed() && i < max - 1) {
+      beforeNudge = reply.text.trim();
+      thread.push({ role: 'user', text: reviewReminder(reviewTarget()!) });
+      continue;
+    }
     if (reply.text.trim()) emitText(emit, `${deps.runId}-msg-${i}`, reply.text.trim());
-    if (reply.toolCalls.length === 0) return finish(reply.text);
+    if (reply.toolCalls.length === 0) {
+      // Small models sometimes answer with nothing at all: the user would see only a finished step.
+      if (!reply.text.trim() && !uiShown && !deps.signal?.aborted) {
+        if (!emptyNudged && i < max - 1) {
+          emptyNudged = true;
+          thread.push({ role: 'user', text: EMPTY_REMINDER });
+          continue;
+        }
+        const note = 'I could not produce an answer to that. Try asking it another way, or switch to the Cloud model.';
+        thread.push({ role: 'assistant', text: note, toolCalls: [] });
+        emitText(emit, `${deps.runId}-msg-empty`, note);
+      }
+      return finish(reply.text);
+    }
 
     const results: ToolResult[] = [];
     let pending: PendingApproval | undefined;
     for (const call of reply.toolCalls) {
       if (!needsApproval(call.name)) {
-        results.push({ callId: call.id, name: call.name, content: await runTool(call, deps) });
+        const content = await runTool(call, deps);
+        results.push({ callId: call.id, name: call.name, content });
+        const read = (content as { number?: unknown; error?: unknown } | null) ?? {};
+        if (call.name === getPullRequest.name && !read.error && typeof read.number === 'number') readPulls.add(read.number);
+        continue;
+      }
+      if (deps.readOnly) {
+        const error = 'Another change is waiting for the user\'s approval, so nothing else can change now. Ask them to approve or reject it first.';
+        const stepId = toolStepId(deps.runId, call.id);
+        emit({ type: 'STEP_STARTED', stepId, stepName: getToolSpec(call.name)?.label ?? call.name });
+        emit({ type: 'STEP_FINISHED', stepId, status: 'error', detail: 'Not while a change waits for approval' });
+        results.push({ callId: call.id, name: call.name, content: { error } });
         continue;
       }
       if (pending) {
@@ -200,6 +264,13 @@ async function loop(thread: ChatMessage[], deps: AgentDeps, uiShownBefore: boole
 
   emitText(emit, `${deps.runId}-msg-limit`, `I stopped after ${max} steps. Try a more specific request.`);
   return finish('');
+}
+
+const EMPTY_REMINDER =
+  '[RepoPilot app] Your last reply was empty, so the user saw nothing. Answer their last message now: call a tool if it needs repository data, otherwise reply in one to three sentences.';
+
+function reviewReminder(number: number): string {
+  return `[RepoPilot app] No review draft exists yet: submit_pull_request_review was not called, so the user sees nothing to review. Call submit_pull_request_review now for pull request #${number}, with comments only on real problems (an empty list is fine). Never say a draft exists before the tool was called.`;
 }
 
 /**
@@ -232,12 +303,19 @@ async function runTool(call: ToolCall, deps: AgentDeps): Promise<unknown> {
     return { error: message };
   };
 
-  if (!spec || !deps.executors[spec.name]) return fail(`Unknown tool "${call.name}".`);
+  if (!spec || (!deps.executors[spec.name] && spec.side !== 'client')) return fail(`Unknown tool "${call.name}".`);
   // Defence in depth: the loop routes these to prepareApproval, never here.
   if (needsApproval(spec.name)) return fail(`"${spec.name}" changes the repository and needs user approval.`);
 
   const parsed = spec.input.safeParse(dropNulls(call.args));
   if (!parsed.success) return fail(invalidInput(spec.name, parsed.error));
+
+  // Client tools only change what is on screen: the browser runs them (validated input only).
+  if (spec.side === 'client') {
+    emit({ type: 'CUSTOM', name: 'client_tool', value: { callId: call.id, name: spec.name, args: parsed.data } });
+    emit({ type: 'STEP_FINISHED', stepId, status: 'done', detail: clientDetail(spec.name, parsed.data) });
+    return { sentToApp: true, note: 'The app applies this on the user\'s screen. Say briefly what you did; do not repeat data.' };
+  }
 
   try {
     const out = await deps.executors[spec.name](parsed.data, deps.ctx);
@@ -398,6 +476,19 @@ function showCard(deps: AgentDeps, surfaceId: string, component: GateComponent, 
   if (!check.ok) return check.error;
   deps.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId, node } });
   return null;
+}
+
+/** The step detail for a client tool, e.g. "src/auth/login.js:12–18". */
+function clientDetail(name: string, args: unknown): string {
+  const a = args as Record<string, unknown>;
+  if (name === 'highlight_lines') return `${String(a['path'])}:${String(a['from'])}–${String(a['to'])}`.slice(0, 200);
+  if (name === 'navigate_to') return a['page'] === 'pull_request' ? `Pull request #${String(a['number'])}` : String(a['page']).replace('_', ' ');
+  if (name === 'apply_table_filter') {
+    if (a['clear']) return 'Filter cleared';
+    const parts = [...((a['labels'] as string[]) ?? []), a['state'], a['author']].filter(Boolean);
+    return parts.length ? parts.join(', ').slice(0, 200) : 'No filter';
+  }
+  return 'Done';
 }
 
 function invalidInput(tool: string, error: { issues: { path: PropertyKey[]; message: string }[] }): string {

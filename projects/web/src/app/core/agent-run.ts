@@ -9,7 +9,7 @@ export interface Turn {
   status: 'running' | 'awaiting-approval' | 'done' | 'error';
   steps: Step[];
   /** Validated server-side; validated again by GenUiHost before rendering. */
-  surfaces: UiSurface[];
+  surfaces: ShownSurface[];
   text: string;
   error?: string;
   /** The ApprovalCard this turn is paused on. */
@@ -18,6 +18,13 @@ export interface Turn {
   actionError?: string;
   /** Follow-up prompts suggested from what this turn showed (chips above the prompt box). */
   followups?: string[];
+}
+
+/** A surface as shown: after apply_table_filter, `base` holds the rows the agent fetched. */
+export interface ShownSurface extends UiSurface {
+  base?: UiSurface['node'];
+  /** What the agent filtered by, e.g. "bug · open". */
+  filter?: string;
 }
 
 /** Client-side step shown while a run waits; the resumed run finishes it under the same id. */
@@ -88,17 +95,121 @@ export function applyEvent(turn: Turn, event: AgentEvent): Turn {
  * continues the previous turn, exactly as it streamed live.
  */
 export function replayRuns(runs: { id: string; prompt: string | null; events: AgentEvent[] }[]): Turn[] {
-  const turns: Turn[] = [];
+  let turns: Turn[] = [];
   for (const run of runs) {
+    let at: number;
     if (run.prompt !== null || turns.length === 0) {
       turns.push(newTurn(run.id, run.prompt ?? ''));
+      at = turns.length - 1;
     } else {
-      // The approval was answered: the client cleared `pending` before streaming the resumed run.
-      turns[turns.length - 1] = { ...turns[turns.length - 1], pending: undefined, status: 'running' };
+      // The approval was answered: it continues the turn that waited, which is not the last
+      // one when side questions were asked meanwhile. The client cleared `pending` before streaming it.
+      at = turns.length - 1;
+      for (let i = turns.length - 1; i >= 0; i--) {
+        if (turns[i].status === 'awaiting-approval') {
+          at = i;
+          break;
+        }
+      }
+      turns[at] = { ...turns[at], pending: undefined, status: 'running' };
     }
-    turns[turns.length - 1] = run.events.reduce(applyEvent, turns[turns.length - 1]);
+    for (const event of run.events) {
+      // Table filters are part of what the user saw, so they replay; navigation and highlights do not.
+      const filter = tableFilterOf(event);
+      turns = filter ? filterTables(turns, filter) : turns.map((t, i) => (i === at ? applyEvent(t, event) : t));
+    }
   }
   return turns;
+}
+
+// ---------------------------------------------------------------------------
+// apply_table_filter: the agent filters a table already on screen, in place
+// ---------------------------------------------------------------------------
+
+/** The filter input, as validated by the server (ApplyTableFilterInput). */
+export interface TableFilter {
+  target: 'IssueTable' | 'PrList';
+  labels?: string[];
+  state?: 'open' | 'closed' | 'draft' | 'merged';
+  author?: string;
+  clear?: boolean;
+}
+
+/** A filter event from the stream, or null. */
+export function tableFilterOf(event: AgentEvent): TableFilter | null {
+  if (event.type !== 'CUSTOM' || event.name !== 'client_tool' || event.value.name !== 'apply_table_filter') return null;
+  const a = event.value.args as TableFilter | null;
+  return a && (a.target === 'IssueTable' || a.target === 'PrList') ? a : null;
+}
+
+/** "bug · open · by octocat" */
+export function describeFilter(f: TableFilter): string {
+  return [...(f.labels ?? []), f.state, f.author ? `by ${f.author}` : undefined].filter(Boolean).join(' · ') || 'all rows';
+}
+
+/**
+ * Filters the most recent surface that shows the target table (also nested,
+ * e.g. the health report's oldest issues), keeping the unfiltered node as
+ * `base` so Clear can restore it. A second filter starts from the base again.
+ */
+export function filterTables(turns: Turn[], f: TableFilter): Turn[] {
+  for (let t = turns.length - 1; t >= 0; t--) {
+    const surfaces = turns[t].surfaces;
+    for (let s = surfaces.length - 1; s >= 0; s--) {
+      const surface = surfaces[s];
+      const base = surface.base ?? surface.node;
+      if (!contains(base, f.target)) continue;
+      const next: ShownSurface = f.clear || isEmptyFilter(f)
+        ? { surfaceId: surface.surfaceId, node: base }
+        : { surfaceId: surface.surfaceId, node: mapTables(base, f), base, filter: describeFilter(f) };
+      return turns.map((turn, i) => (i === t ? { ...turn, surfaces: turn.surfaces.map((x, j) => (j === s ? next : x)) } : turn));
+    }
+  }
+  return turns;
+}
+
+/** Clear on a filtered surface: back to the rows the agent fetched. */
+export function clearFilter(turns: Turn[], surfaceId: string): Turn[] {
+  return turns.map((t) => ({
+    ...t,
+    surfaces: t.surfaces.map((s) => (s.surfaceId === surfaceId && s.base ? { surfaceId: s.surfaceId, node: s.base } : s)),
+  }));
+}
+
+function isEmptyFilter(f: TableFilter): boolean {
+  return !f.labels?.length && !f.state && !f.author;
+}
+
+type AnyNode = { component?: unknown; props?: Record<string, unknown> };
+
+function childrenOf(node: AnyNode): AnyNode[] | null {
+  const c = node.props?.['children'];
+  return Array.isArray(c) ? (c as AnyNode[]) : null;
+}
+
+function contains(node: unknown, target: string): boolean {
+  const n = node as AnyNode;
+  return n?.component === target || (childrenOf(n)?.some((c) => contains(c, target)) ?? false);
+}
+
+function mapTables(node: unknown, f: TableFilter): UiSurface['node'] {
+  const n = node as AnyNode;
+  if (n.component === f.target && n.props) {
+    const key = f.target === 'IssueTable' ? 'rows' : 'items';
+    const rows = Array.isArray(n.props[key]) ? (n.props[key] as Record<string, unknown>[]) : [];
+    return { ...n, props: { ...n.props, [key]: rows.filter((r) => matches(r, f)) } } as UiSurface['node'];
+  }
+  const children = childrenOf(n);
+  if (!children) return n as UiSurface['node'];
+  return { ...n, props: { ...n.props, children: children.map((c) => mapTables(c, f)) } } as UiSurface['node'];
+}
+
+function matches(row: Record<string, unknown>, f: TableFilter): boolean {
+  const labels = (Array.isArray(row['labels']) ? row['labels'] : []).map((l) => String(l).toLowerCase());
+  if (f.labels?.some((l) => !labels.includes(l.toLowerCase()))) return false;
+  if (f.state && row['state'] !== f.state) return false;
+  if (f.author && String(row['author'] ?? '').toLowerCase() !== f.author.toLowerCase()) return false;
+  return true;
 }
 
 const componentOf = (node: unknown) => (node as { component?: unknown } | null)?.component;
@@ -114,7 +225,7 @@ function isDiffSection(node: unknown): boolean {
  * The surfaces to draw for a turn. Once the review draft is on screen it carries
  * the same diffs itself, so the plain diff shown while the agent read the PR is dropped.
  */
-export function visibleSurfaces(turn: Turn): UiSurface[] {
+export function visibleSurfaces(turn: Turn): ShownSurface[] {
   if (!turn.surfaces.some((s) => componentOf(s.node) === 'PrReview')) return turn.surfaces;
   return turn.surfaces.filter((s) => !isDiffSection(s.node));
 }

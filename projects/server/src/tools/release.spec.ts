@@ -34,7 +34,7 @@ function fakeCtx(existingTags = ['v1.0.0']) {
       };
     },
   };
-  return { ctx: { github, allowlist: ['octo/demo'] } as unknown as ToolContext, posted };
+  return { ctx: { github, repo: 'octo/demo' } as unknown as ToolContext, posted };
 }
 
 const draft = {

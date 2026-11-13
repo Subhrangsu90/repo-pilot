@@ -1,5 +1,6 @@
 import { Component, computed, input, linkedSignal } from '@angular/core';
 import { EmitFn, PropsOf } from '@repopilot/shared';
+import { InjectionBadge } from '../../shared/ui/injection-badge';
 
 /**
  * Issues as a table. With `selectable`, the user picks rows and every change
@@ -8,6 +9,7 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
  */
 @Component({
   selector: 'app-issue-table',
+  imports: [InjectionBadge],
   host: { class: 'block' },
   template: `
     <div class="card overflow-x-auto">
@@ -65,6 +67,9 @@ import { EmitFn, PropsOf } from '@repopilot/shared';
                 }
                 <td class="px-5 py-2.5">
                   <span class="mr-2 font-mono text-fg-faint group-hover:text-fg-muted">#{{ row.number }}</span>{{ row.title }}
+                  @if (row.injection) {
+                    <app-injection-badge class="ml-2 align-middle" />
+                  }
                 </td>
                 <td class="px-2.5 py-2.5">
                   <div class="flex flex-wrap gap-1">
