@@ -1,5 +1,6 @@
 import { and, desc, eq, exists, ilike, isNotNull, or, sql, type SQL } from 'drizzle-orm';
-import type { AgentEvent } from '@repopilot/shared';
+import { A2UI_OPERATIONS_KEY, EventType, readSurface, rootComponent, type A2uiMessage, type AgUiEvent } from '@repopilot/shared';
+import { upgradeEvents } from './agent/legacy';
 import type { Db } from './db/client';
 import { auditEntries, runs, sessions } from './db/schema';
 import type { ExecutedChange, PendingApproval } from './agent/loop';
@@ -17,21 +18,24 @@ export const auditSeq = (id: string) => (/^aud_(\d{1,12})$/.exec(id) ? Number(id
 
 export { titleFrom };
 
-/** The components a run showed, in order, without repeats. */
-export function componentsIn(events: AgentEvent[]): string[] {
+/** The components a run showed (each A2UI surface's top component), in order, without repeats. */
+export function componentsIn(events: AgUiEvent[]): string[] {
   const names: string[] = [];
   for (const e of events) {
-    if (e.type === 'CUSTOM' && e.name === 'ui' && !names.includes(e.value.node.component)) names.push(e.value.node.component);
+    if (e.type !== EventType.ACTIVITY_SNAPSHOT) continue;
+    const ops = (e.content as Record<string, unknown>)[A2UI_OPERATIONS_KEY];
+    const name = Array.isArray(ops) ? rootComponent(readSurface(ops as A2uiMessage[])) : undefined;
+    if (name && !names.includes(name)) names.push(name);
   }
   return names;
 }
 
 /** The assistant's text in a run (the last message), for the History card. */
-export function lastText(events: AgentEvent[]): string {
+export function lastText(events: AgUiEvent[]): string {
   let text = '';
   for (const e of events) {
-    if (e.type === 'TEXT_MESSAGE_START') text = '';
-    if (e.type === 'TEXT_MESSAGE_CONTENT') text += e.delta;
+    if (e.type === EventType.TEXT_MESSAGE_START) text = '';
+    if (e.type === EventType.TEXT_MESSAGE_CONTENT) text += e.delta;
   }
   return text.trim().slice(0, 240);
 }
@@ -51,7 +55,7 @@ export class Store {
     try {
       const last = run.events.at(-1);
       const waiting = thread.pending?.runId === run.id;
-      const status = last?.type === 'RUN_ERROR' ? 'error' : waiting ? 'awaiting-approval' : 'done';
+      const status = last?.type === EventType.RUN_ERROR ? 'error' : waiting ? 'awaiting-approval' : 'done';
       const now = new Date();
       // The signed-in user who started the conversation (or the GITHUB_TOKEN owner in dev mode).
       const userId = thread.owner ?? 'unknown';
@@ -145,7 +149,7 @@ export class Store {
           .from(runs)
           .where(eq(runs.sessionId, s.id))
           .orderBy(runs.createdAt);
-        const events = r.map((x) => x.events as AgentEvent[]);
+        const events = r.map((x) => upgradeEvents(x.events));
         return {
           prompt: r.find((x) => x.prompt)?.prompt ?? '',
           lastResult: [...events].reverse().map(lastText).find(Boolean) ?? '',
@@ -168,7 +172,8 @@ export class Store {
       .from(runs)
       .where(eq(runs.sessionId, id))
       .orderBy(runs.createdAt);
-    return { ...session, runs: r };
+    // Runs saved before AG-UI + A2UI are upgraded on the way out (agent/legacy.ts).
+    return { ...session, runs: r.map((run) => ({ ...run, events: upgradeEvents(run.events) })) };
   }
 
   /** The profile page's "Your data": this user's conversations and the changes they approved. */

@@ -3,8 +3,8 @@ import type { ComponentName } from '@repopilot/shared';
 
 /**
  * Maps every catalog name to the Angular component that renders it.
- * Kept in its own file so `GenUiHost` can inject it without importing the
- * components (Grid and Section render hosts, so a direct import would cycle).
+ * Kept in its own file so `A2uiNode` (the A2UI catalog entry of every
+ * component) can inject it without importing the components.
  */
 export type GenUiRegistry = Record<ComponentName, Type<unknown>>;
 

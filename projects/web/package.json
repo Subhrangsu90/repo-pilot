@@ -12,6 +12,10 @@
     "serve:ssr": "node dist/repo-pilot/server/server.mjs"
   },
   "dependencies": {
+    "@a2ui/angular": "^0.14.0",
+    "@a2ui/web_core": "^0.15.0",
+    "@ag-ui/client": "^1.0.4",
+    "@ag-ui/core": "^1.0.4",
     "@angular/common": "^22.1.0",
     "@angular/compiler": "^22.1.0",
     "@angular/core": "^22.1.0",

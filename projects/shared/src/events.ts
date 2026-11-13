@@ -1,73 +1,66 @@
-import type { ComponentName, UiNode } from './catalog';
+/**
+ * Agent ↔ UI transport: the AG-UI protocol (v1.0, `@ag-ui/core`).
+ *
+ * The browser starts every run with `POST /api/agent` and an AG-UI
+ * `RunAgentInput`; the answer is the run's AG-UI event stream (SSE, or
+ * protobuf when the client asks for it). This file holds RepoPilot's
+ * conventions on top of the protocol, used by both sides:
+ *
+ * - UI: A2UI surfaces as ACTIVITY_SNAPSHOT / ACTIVITY_DELTA (see a2ui.ts).
+ * - Steps: STEP_STARTED / STEP_FINISHED carry a unique `stepName` and the
+ *   label, status and detail in `metadata.repopilot`.
+ * - Approvals: a change waits as an AG-UI interrupt (RUN_FINISHED with outcome
+ *   `interrupt`); the answer is a new run whose `resume` entry carries an
+ *   `ApprovalDecision`.
+ * - Client tools: TOOL_CALL_* events for tools the browser declared in
+ *   `RunAgentInput.tools`; the browser applies them on screen.
+ * - Shared state: STATE_SNAPSHOT / STATE_DELTA with `RepoPilotState`.
+ */
+import * as z from 'zod';
+import type { Event as AgUiEvent, Metadata } from '@ag-ui/core';
+import type { ComponentName } from './catalog';
+
+export { EventType } from '@ag-ui/core';
+export type { AgUiEvent };
 
 // ---------------------------------------------------------------------------
-// UI -> agent
+// UI -> agent (inside the browser: catalog component → A2UI action)
 // ---------------------------------------------------------------------------
 
 /**
- * A user action inside a rendered component, sent back to the agent
- * (approve, select, field-change, ...). `surfaceId` is filled in by the
- * session layer.
+ * A user action inside a rendered component (approve, select, retry, ...).
+ * The A2UI host turns it into an A2UI `action` on the component's surface.
  */
 export interface UiEvent {
   component: ComponentName;
   name: string;
   payload?: unknown;
   surfaceId?: string;
+  /** The A2UI action this event travelled as (set by the A2UI surface view). */
+  action?: A2uiUserAction;
 }
 
 /** Callback every catalog component receives to report a UiEvent. */
 export type EmitFn = (event: UiEvent) => void;
 
 // ---------------------------------------------------------------------------
-// Agent -> UI: run events streamed over SSE
+// Event metadata
 // ---------------------------------------------------------------------------
 
-/**
- * Event names follow the AG-UI protocol (RUN_STARTED, STEP_STARTED,
- * TEXT_MESSAGE_CONTENT, CUSTOM, ...), so the stream could later be consumed by
- * any AG-UI client. Only the subset RepoPilot needs is defined here.
- */
-export type AgentEvent =
-  | { type: 'RUN_STARTED'; threadId: string; runId: string }
-  | { type: 'RUN_FINISHED'; threadId: string; runId: string }
-  | { type: 'RUN_ERROR'; message: string; code?: string }
-  /** One unit of visible progress: a model call or a tool call. */
-  | { type: 'STEP_STARTED'; stepId: string; stepName: string }
-  | { type: 'STEP_FINISHED'; stepId: string; status: 'done' | 'error'; detail?: string }
-  | { type: 'TEXT_MESSAGE_START'; messageId: string; role: 'assistant' }
-  | { type: 'TEXT_MESSAGE_CONTENT'; messageId: string; delta: string }
-  | { type: 'TEXT_MESSAGE_END'; messageId: string }
-  /** A validated UI node. Same surfaceId again = replace that surface in place. */
-  | { type: 'CUSTOM'; name: 'ui'; value: UiSurface }
-  /** The run paused on an ApprovalCard; it resumes through POST /api/runs/:runId/actions. */
-  | { type: 'CUSTOM'; name: 'approval'; value: ApprovalRequest }
-  /** Follow-up prompts suggested from what the run showed; rendered as chips above the prompt box. */
-  | { type: 'CUSTOM'; name: 'followups'; value: { prompts: string[] } }
-  /** A client tool call (navigate_to, highlight_lines, apply_table_filter), validated by the server; the browser runs it. */
-  | { type: 'CUSTOM'; name: 'client_tool'; value: ClientToolCall };
+/** The `metadata` key RepoPilot uses on AG-UI events (the `ag-ui` key is reserved by the protocol). */
+export const META_KEY = 'repopilot';
 
-export interface ClientToolCall {
-  callId: string;
-  name: string;
-  /** Parsed with the tool's own input schema on the server. */
-  args: unknown;
+/** One visible progress step: a model call or a tool call. */
+export interface StepMeta {
+  label?: string;
+  status?: 'done' | 'error';
+  detail?: string;
 }
 
-export interface UiSurface {
-  surfaceId: string;
-  node: UiNode;
+export function stepMeta(event: { metadata?: Metadata }): StepMeta {
+  const meta = event.metadata?.[META_KEY];
+  return meta && typeof meta === 'object' ? (meta as StepMeta) : {};
 }
-
-export interface ApprovalRequest {
-  /** The run that paused (the actions endpoint is keyed by it). */
-  runId: string;
-  toolCallId: string;
-  /** The ApprovalCard surface. */
-  surfaceId: string;
-}
-
-export type AgentEventType = AgentEvent['type'];
 
 /**
  * Step id of a tool call. The client shows a placeholder of an agent surface
@@ -75,37 +68,71 @@ export type AgentEventType = AgentEvent['type'];
  */
 export const toolStepId = (runId: string, callId: string) => `${runId}-tool-${callId}`;
 export const isToolStepId = (stepId: string) => stepId.includes('-tool-');
+/** The step a paused change shows until it is answered; the resuming run finishes it. */
+export const approvalStepId = (toolCallId: string) => `approval-${toolCallId}`;
 
 // ---------------------------------------------------------------------------
-// HTTP contract
+// Human in the loop: interrupts and resume
+// ---------------------------------------------------------------------------
+
+/** `Interrupt.reason` of a change waiting for the user's approval. */
+export const APPROVAL_INTERRUPT = 'tool_approval';
+
+/** `Interrupt.metadata.repopilot` of an approval: where its surface is. */
+export interface ApprovalInterruptMeta {
+  surfaceId: string;
+  tool: string;
+  risk: 'write' | 'destructive';
+}
+
+/** The answer to an approval interrupt (`ResumeEntry.payload`). */
+export const ApprovalDecision = z.object({
+  decision: z.enum(['approve', 'reject']),
+  /** Approve only: the item ids still ticked. Ids that were not in the dry run are ignored. */
+  selected: z.array(z.number().int().positive()).max(100).optional(),
+  /** Approve only: what the user changed in the surface, checked by the tool's own schema. */
+  edits: z.unknown().optional(),
+});
+export type ApprovalDecision = z.infer<typeof ApprovalDecision>;
+
+// ---------------------------------------------------------------------------
+// RunAgentInput.forwardedProps
 // ---------------------------------------------------------------------------
 
 /** The side-nav model switch: the cloud model or the local Ollama model. */
 export type ModelOption = 'cloud' | 'local';
 
-export interface StartRunRequest {
-  prompt: string;
-  /** Continue a conversation; omitted for a new one. */
-  threadId?: string;
-  /** Omitted: the server's LLM_PROVIDER decides. */
-  model?: ModelOption;
-  /** The PR review page: the run must end on a review draft of this pull request. */
-  reviewPullRequest?: number;
+/** An A2UI action, forwarded the way the AG-UI A2UI middleware does (`forwardedProps.a2uiAction.userAction`). */
+export const A2uiUserAction = z.object({
+  name: z.string().min(1).max(64),
+  surfaceId: z.string().min(1).max(200),
+  sourceComponentId: z.string().min(1).max(100),
+  timestamp: z.string().max(40),
+  context: z.record(z.string(), z.unknown()),
+});
+export type A2uiUserAction = z.infer<typeof A2uiUserAction>;
+
+export const ForwardedProps = z.object({
   /** "owner/name" picked in the app; a conversation stays on the repo it started with. */
-  repo?: string;
-}
+  repo: z.string().max(140).optional(),
+  /** Omitted: the server's LLM_PROVIDER decides. */
+  model: z.enum(['cloud', 'local']).optional(),
+  /** The PR review page: the run must end on a review draft of this pull request. */
+  reviewPullRequest: z.number().int().positive().optional(),
+  /** The surface action that led to this run (approve, reject, retry, ...). Informational. */
+  a2uiAction: z.object({ userAction: A2uiUserAction }).optional(),
+});
+export type ForwardedProps = z.infer<typeof ForwardedProps>;
 
-export interface StartRunResponse {
-  runId: string;
-  threadId: string;
-}
+// ---------------------------------------------------------------------------
+// Shared state (STATE_SNAPSHOT / STATE_DELTA)
+// ---------------------------------------------------------------------------
 
-/** POST /api/runs/:runId/actions — the user's decision on a paused run. Answered with a StartRunResponse. */
-export interface ApprovalAction {
-  toolCallId: string;
-  decision: 'approve' | 'reject';
-  /** Approve only: the item ids still ticked. Ids that were not in the dry run are ignored. */
-  selected?: number[];
-  /** Approve only: what the user changed in the surface (e.g. PrReviewEdits), checked by the tool's own schema. */
-  edits?: unknown;
+export interface RepoPilotState {
+  repo: string | null;
+  model: ModelOption | null;
+  /** The change waiting for the user, if any. */
+  pendingApproval: { interruptId: string; toolCallId: string; surfaceId: string } | null;
+  /** Follow-up prompts suggested from what the run showed (chips above the prompt box). */
+  followups: string[];
 }

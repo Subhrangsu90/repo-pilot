@@ -1,8 +1,33 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { HttpAgent, type RunAgentInput } from '@ag-ui/client';
+import { EventType, surfaceMessages, surfaceSnapshot } from '@repopilot/shared';
+import { AGENT_FACTORY } from '../../core/agent-session';
 import { provideGenUi } from '../../genui/registry';
 import { bulkPrompt, IssueList, issueRefs } from './issue-list';
+
+/** The agent server, as far as this page needs it: every run pauses on an approval card for #9 and #10. */
+const runs: RunAgentInput[] = [];
+async function agentServer(_url: string, init: RequestInit): Promise<Response> {
+  const input = JSON.parse(String(init.body)) as RunAgentInput;
+  runs.push(input);
+  const card = {
+    component: 'ApprovalCard',
+    props: { toolCallId: 'c1', tool: 'bulk_update_issues', risk: 'destructive', verb: 'close', noun: 'issue', summary: 'Close them.', items: [{ id: 9, title: 'Support IE11' }, { id: 10, title: 'Bazel' }], reversible: true },
+  };
+  const events = [
+    { type: EventType.RUN_STARTED, threadId: input.threadId, runId: input.runId },
+    surfaceSnapshot('r1-c1', surfaceMessages('r1-c1', card)),
+    {
+      type: EventType.RUN_FINISHED,
+      threadId: input.threadId,
+      runId: input.runId,
+      outcome: { type: 'interrupt', interrupts: [{ id: 'c1', reason: 'tool_approval', toolCallId: 'c1', metadata: { repopilot: { surfaceId: 'r1-c1' } } }] },
+    },
+  ];
+  return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+}
 
 const row = (number: number, title: string, labels: string[], state: 'open' | 'closed' = 'open') => ({
   number,
@@ -24,7 +49,15 @@ describe('issue prompts', () => {
 
 describe('IssueList', () => {
   async function render() {
-    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideGenUi()] });
+    runs.length = 0;
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideGenUi(),
+        { provide: AGENT_FACTORY, useValue: (threadId: string) => new HttpAgent({ url: '/api/agent', threadId, fetch: agentServer }) },
+      ],
+    });
     const http = TestBed.inject(HttpTestingController);
     const fixture = TestBed.createComponent(IssueList);
     fixture.detectChanges();
@@ -53,7 +86,7 @@ describe('IssueList', () => {
   }
 
   it('filters by label and asks the agent to close the ticked issues, which waits for an approval card', async () => {
-    const { fixture, http, el, button, rows } = await render();
+    const { fixture, el, button, rows } = await render();
     expect(rows()).toHaveLength(3);
 
     button('wontfix')!.click();
@@ -69,10 +102,16 @@ describe('IssueList', () => {
     expect(button('Reopen')!.disabled).toBe(true);
 
     button('Close 2')!.click();
-    const run = http.expectOne('/api/runs');
-    expect(run.request.method).toBe('POST');
-    // The run carries the selected repository; the agent works on that one only.
-    expect(run.request.body).toMatchObject({ prompt: 'Close issues #9 and #10 as not planned', repo: 'octo/demo' });
+    // One AG-UI run: the prompt as the user message, the selected repository in forwardedProps.
+    await vi.waitFor(() => expect(runs).toHaveLength(1));
+    expect(runs[0].messages).toEqual([expect.objectContaining({ role: 'user', content: 'Close issues #9 and #10 as not planned' })]);
+    expect(runs[0].forwardedProps).toMatchObject({ repo: 'octo/demo' });
+
+    // The run ends as an interrupt; its approval card renders through A2UI under the table.
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(el.querySelector('app-approval-card')?.textContent).toContain('Support IE11');
+    });
   });
 
   it('clears the label filter and the ticks when the state changes', async () => {

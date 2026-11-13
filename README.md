@@ -9,10 +9,21 @@ Design document: [docs/project-documentation.md](docs/project-documentation.md)
 ## Structure
 
 ```text
-projects/web       Angular 22 app: pages, the agent chat, catalog components, renderer
-projects/server    Node agent server (Fastify): model loop, GitHub tools, event stream, auth, Postgres store
-projects/shared    Zod component catalog, validateNode(), tool specs, prompt doc, event types
+projects/web       Angular 22 app: pages, the agent chat, catalog components, A2UI renderer
+projects/server    Node agent server (Fastify): model loop, GitHub tools, AG-UI endpoint, auth, Postgres store
+projects/shared    Zod component catalog, validateNode(), A2UI conversion, AG-UI conventions, tool specs, prompt doc
 ```
+
+The agent and the app speak two open protocols:
+
+- **AG-UI** (transport): every run is one `POST /api/agent` with an AG-UI `RunAgentInput`, answered
+  by the run's event stream (steps, reasoning, tool calls, shared state, text). A change that
+  needs approval ends the run as an AG-UI interrupt; the answer is a run that resumes it.
+- **A2UI** (rendering): everything the agent shows is A2UI v1.0 messages, rendered by
+  `@a2ui/angular` with RepoPilot's own component catalog. The agent sends layout and data, never
+  code, and everything is validated on both sides.
+
+`.npmrc` sets `legacy-peer-deps=true` because `@a2ui/angular` still declares Angular 21 as a peer.
 
 ## Getting started
 

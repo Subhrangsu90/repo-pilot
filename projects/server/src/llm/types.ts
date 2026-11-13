@@ -46,6 +46,19 @@ export interface LlmReply {
   raw?: { provider: string; data: unknown };
   /** The model that actually answered (differs from the primary after a fallback). */
   model: string;
+  /** The model's thought summary, when the provider shares one (shown as AG-UI reasoning, as text). */
+  reasoning?: string;
+  /** Token counts for this call, in AG-UI's accounting (reasoning and cached tokens are parts of the totals). */
+  usage?: LlmUsage;
+}
+
+export interface LlmUsage {
+  provider: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
 }
 
 export interface LlmProvider {

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent } from '@repopilot/shared';
+import { EventType, surfaceMessages, type AgUiEvent } from '@repopilot/shared';
 import type { ExecutedChange, PendingApproval } from './agent/loop';
 import type { Thread } from './agent/runs';
+import { surfaceSnapshot } from '@repopilot/shared';
 import { openDb } from './db/client';
 import { auditEntries, runs, sessions } from './db/schema';
 import { auditId, componentsIn, lastText, Store, titleFrom } from './store';
@@ -15,10 +16,20 @@ import { auditId, componentsIn, lastText, Store, titleFrom } from './store';
 const url = process.env['TEST_DATABASE_URL'];
 const maybe = url ? describe : describe.skip;
 
-const ui = (component: string): AgentEvent => ({ type: 'CUSTOM', name: 'ui', value: { surfaceId: randomUUID(), node: { component, props: {} } } });
-const text = (delta: string): AgentEvent[] => [
-  { type: 'TEXT_MESSAGE_START', messageId: 'm', role: 'assistant' },
-  { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta },
+const PROPS: Record<string, unknown> = {
+  PrList: { items: [] },
+  Section: { title: 'Report', children: [] },
+  Grid: { children: [] },
+  ApprovalCard: { toolCallId: 'c1', tool: 'bulk_update_issues', risk: 'destructive', verb: 'close', noun: 'issue', summary: '', reversible: true },
+};
+/** A new A2UI surface on the stream, as the loop sends it. */
+const ui = (component: string): AgUiEvent => {
+  const id = randomUUID();
+  return surfaceSnapshot(id, surfaceMessages(id, { component, props: PROPS[component] }));
+};
+const text = (delta: string): AgUiEvent[] => [
+  { type: EventType.TEXT_MESSAGE_START, messageId: 'm', role: 'assistant' },
+  { type: EventType.TEXT_MESSAGE_CONTENT, messageId: 'm', delta },
 ];
 
 maybe('Store (Postgres)', () => {

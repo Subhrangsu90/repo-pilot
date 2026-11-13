@@ -47,11 +47,16 @@ export function createOllama(baseUrl: string, configured: string, numCtx = 8192,
       }
 
       const json = (await res.json()) as {
-        message?: { content?: string; tool_calls?: { function: { name: string; arguments: unknown } }[] };
+        message?: { content?: string; thinking?: string; tool_calls?: { function: { name: string; arguments: unknown } }[] };
+        prompt_eval_count?: number;
+        eval_count?: number;
       };
       const calls = json.message?.tool_calls ?? [];
+      const reasoning = json.message?.thinking?.trim();
       return {
         model,
+        ...(reasoning ? { reasoning } : {}),
+        usage: { provider: 'ollama', model, inputTokens: json.prompt_eval_count, outputTokens: json.eval_count },
         text: json.message?.content ?? '',
         toolCalls: calls.map((c, i) => ({
           id: `ollama-${Date.now()}-${i}`,

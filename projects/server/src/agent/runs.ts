@@ -1,18 +1,23 @@
-import { randomUUID } from 'node:crypto';
-import type { AgentEvent, ModelOption, StartRunResponse } from '@repopilot/shared';
-import type { ChatMessage } from '../llm';
+import { EventType, type AgUiEvent, type ModelOption, type RepoPilotState } from '@repopilot/shared';
+import type { RunFinishedOutcome, TokenUsage } from '@ag-ui/core';
+import type { ChatMessage, LlmUsage } from '../llm';
 import type { PendingApproval } from './loop';
+import { StreamGuard } from '@repopilot/shared';
+
+/** The AG-UI protocol version this server speaks (RUN_STARTED.protocolVersion). */
+export const AGUI_PROTOCOL_VERSION = '1.0';
 
 /**
- * In-memory runs and threads (moving to Postgres with the audit log).
- * A run buffers its events, so a client that connects late, or reconnects,
- * replays everything from the start.
+ * In-memory runs and threads (Postgres keeps them across restarts). A run is
+ * one AG-UI run: RUN_STARTED, a STATE_SNAPSHOT, the agent's events, then
+ * RUN_FINISHED (success, interrupt or cancelled) or RUN_ERROR. The run buffers
+ * its events for the store, and anything left open is closed before it ends.
  */
 interface Run {
   id: string;
   threadId: string;
-  events: AgentEvent[];
-  listeners: Set<(event: AgentEvent) => void>;
+  events: AgUiEvent[];
+  listeners: Set<(event: AgUiEvent) => void>;
   done: boolean;
   controller: AbortController;
   /** The user prompt that started it; undefined for a run that resumed after an approval. */
@@ -23,7 +28,7 @@ interface Run {
 export interface FinishedRun {
   id: string;
   prompt?: string;
-  events: AgentEvent[];
+  events: AgUiEvent[];
 }
 
 export interface Thread {
@@ -37,9 +42,23 @@ export interface Thread {
   repo?: string;
   /** Model picked in the UI when the conversation last ran; resumed runs use it too. */
   model?: ModelOption;
-  /** A tool call paused on an ApprovalCard. New prompts are refused until it is answered. */
+  /** A tool call paused as an AG-UI interrupt. Answered by a run whose `resume` names it. */
   pending?: PendingApproval;
 }
+
+/** How a run body ends: its AG-UI outcome (absent = success). */
+export interface RunEnd {
+  outcome?: RunFinishedOutcome;
+}
+
+export interface RunControl {
+  id: string;
+  signal: AbortSignal;
+  /** Token usage of one model call; RUN_FINISHED reports the sum per provider and model. */
+  addUsage: (usage: LlmUsage) => void;
+}
+
+export type RunBody = (thread: Thread, emit: (e: AgUiEvent) => void, run: RunControl) => Promise<RunEnd | void>;
 
 const RUN_TTL_MS = 10 * 60_000;
 const MAX_THREADS = 200;
@@ -48,17 +67,10 @@ const runs = new Map<string, Run>();
 const threads = new Map<string, Thread>();
 
 export class ThreadBusyError extends Error {}
-
-export type RunBody = (thread: Thread, emit: (e: AgentEvent) => void, run: { id: string; signal: AbortSignal }) => Promise<void>;
+export class RunIdTakenError extends Error {}
 
 export function getThread(id: string | undefined): Thread | undefined {
   return id ? threads.get(id) : undefined;
-}
-
-/** The thread whose pending approval was raised by this run. */
-export function findPendingByRun(runId: string): Thread | undefined {
-  for (const thread of threads.values()) if (thread.pending?.runId === runId) return thread;
-  return undefined;
 }
 
 let observer: ((run: FinishedRun, thread: Thread) => void) | undefined;
@@ -84,36 +96,77 @@ export function dropThread(id: string) {
   if (thread && !thread.busy) threads.delete(id);
 }
 
-export function startRun(threadId: string | undefined, body: RunBody, opts: { prompt?: string; owner?: string; repo?: string } = {}): StartRunResponse {
-  const tid = threadId && threads.has(threadId) ? threadId : randomUUID();
-  const thread = threads.get(tid) ?? { id: tid, messages: [], busy: false, touched: Date.now(), owner: opts.owner, repo: opts.repo };
+/** The shared state of a thread, sent as STATE_SNAPSHOT when a run starts. */
+export function stateOf(thread: Thread): RepoPilotState {
+  const p = thread.pending;
+  return {
+    repo: thread.repo ?? null,
+    model: thread.model ?? null,
+    pendingApproval: p ? { interruptId: p.callId, toolCallId: p.callId, surfaceId: p.surfaceId } : null,
+    followups: [],
+  };
+}
+
+/**
+ * Starts an AG-UI run on a thread (created with the client's thread id when new).
+ * The body's events are streamed to subscribers as they happen.
+ */
+export function startRun(
+  threadId: string,
+  runId: string,
+  body: RunBody,
+  opts: { prompt?: string; owner?: string; repo?: string } = {},
+): { runId: string; threadId: string } {
+  if (runs.has(runId)) throw new RunIdTakenError('This run id was used already.');
+  const thread = threads.get(threadId) ?? { id: threadId, messages: [], busy: false, touched: Date.now(), owner: opts.owner, repo: opts.repo };
   if (thread.busy) throw new ThreadBusyError('This conversation is still running.');
   thread.busy = true;
   thread.touched = Date.now();
-  threads.set(tid, thread);
+  threads.set(threadId, thread);
   evictOldThreads();
 
-  const run: Run = {
-    id: randomUUID(),
-    threadId: tid,
-    events: [],
-    listeners: new Set(),
-    done: false,
-    controller: new AbortController(),
-    prompt: opts.prompt,
-  };
+  const run: Run = { id: runId, threadId, events: [], listeners: new Set(), done: false, controller: new AbortController(), prompt: opts.prompt };
   runs.set(run.id, run);
+  const guard = new StreamGuard();
+  const usage = new Map<string, TokenUsage>();
 
-  const emit = (event: AgentEvent) => {
+  const emit = (event: AgUiEvent) => {
     if (run.done) return;
+    guard.track(event);
     run.events.push(event);
     for (const l of run.listeners) l(event);
   };
+  const usageList = (): TokenUsage[] | undefined => (usage.size ? [...usage.values()] : undefined);
+  const control: RunControl = {
+    id: run.id,
+    signal: run.controller.signal,
+    addUsage: (u) => {
+      const key = `${u.provider}/${u.model}`;
+      const sum = usage.get(key) ?? { provider: u.provider, model: u.model };
+      for (const k of ['inputTokens', 'outputTokens', 'reasoningTokens', 'cachedInputTokens'] as const) {
+        if (typeof u[k] === 'number') sum[k] = (sum[k] ?? 0) + u[k];
+      }
+      if (sum.inputTokens !== undefined || sum.outputTokens !== undefined) sum.totalTokens = (sum.inputTokens ?? 0) + (sum.outputTokens ?? 0);
+      usage.set(key, sum);
+    },
+  };
 
-  emit({ type: 'RUN_STARTED', threadId: tid, runId: run.id });
-  void body(thread, emit, { id: run.id, signal: run.controller.signal })
-    .then(() => emit({ type: 'RUN_FINISHED', threadId: tid, runId: run.id }))
-    .catch((err: Error) => emit({ type: 'RUN_ERROR', message: err.message.slice(0, 300) }))
+  emit({ type: EventType.RUN_STARTED, threadId, runId: run.id, protocolVersion: AGUI_PROTOCOL_VERSION });
+  emit({ type: EventType.STATE_SNAPSHOT, snapshot: stateOf(thread) });
+
+  const finish = (outcome: RunFinishedOutcome | undefined) => {
+    guard.closeAll(emit, outcome?.type === 'cancelled' ? 'Stopped' : 'Did not finish');
+    const u = usageList();
+    emit({ type: EventType.RUN_FINISHED, threadId, runId: run.id, ...(outcome ? { outcome } : {}), ...(u ? { usage: u } : {}) });
+  };
+
+  void body(thread, emit, control)
+    .then((end) => finish(run.controller.signal.aborted ? { type: 'cancelled' } : (end?.outcome ?? { type: 'success' })))
+    .catch((err: Error) => {
+      if (run.controller.signal.aborted) return finish({ type: 'cancelled' });
+      const u = usageList();
+      emit({ type: EventType.RUN_ERROR, message: err.message.slice(0, 300), ...(u ? { usage: u } : {}) });
+    })
     .finally(() => {
       run.done = true;
       thread.busy = false;
@@ -125,11 +178,11 @@ export function startRun(threadId: string | undefined, body: RunBody, opts: { pr
       setTimeout(() => runs.delete(run.id), RUN_TTL_MS).unref();
     });
 
-  return { runId: run.id, threadId: tid };
+  return { runId: run.id, threadId };
 }
 
 /** Replays past events, then streams new ones. Returns an unsubscribe function, or null for an unknown run. */
-export function subscribe(runId: string, listener: (event: AgentEvent) => void): (() => void) | null {
+export function subscribe(runId: string, listener: (event: AgUiEvent) => void): (() => void) | null {
   const run = runs.get(runId);
   if (!run) return null;
   for (const e of run.events) listener(e);
@@ -138,14 +191,14 @@ export function subscribe(runId: string, listener: (event: AgentEvent) => void):
   return () => run.listeners.delete(listener);
 }
 
-/** The owner of the conversation a run belongs to (undefined for an unknown run). */
-export function runOwner(runId: string): string | undefined {
+/** Stops a run (the client went away or pressed Stop): it ends with outcome `cancelled`. */
+export function cancelRun(runId: string) {
   const run = runs.get(runId);
-  return run ? threads.get(run.threadId)?.owner : undefined;
+  if (run && !run.done) run.controller.abort();
 }
 
-export function isTerminal(event: AgentEvent) {
-  return event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR';
+export function isTerminal(event: AgUiEvent) {
+  return event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR;
 }
 
 function evictOldThreads() {

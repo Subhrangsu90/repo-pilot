@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@repopilot/shared';
+import { A2UI_OPERATIONS_KEY, EventType, readSurface, toNode, type A2uiMessage, type AgUiEvent } from '@repopilot/shared';
 
 /**
  * Follow-up prompts offered as chips under an answer (Screen Spec: Ask
@@ -44,16 +44,25 @@ export function followupsFor(components: string[]): string[] {
  * `finish` that sends the follow-up chips (call it only when the run ends
  * normally, not while it waits for an approval).
  */
-export function trackFollowups(emit: (e: AgentEvent) => void) {
+export function trackFollowups(emit: (e: AgUiEvent) => void) {
   const shown: string[] = [];
   return {
-    emit: (e: AgentEvent) => {
-      if (e.type === 'CUSTOM' && e.name === 'ui') shown.push(surfaceKey(e.value.node));
+    emit: (e: AgUiEvent) => {
+      const node = shownNode(e);
+      if (node) shown.push(surfaceKey(node));
       emit(e);
     },
+    /** Sends the chips as a change to the shared AG-UI state (`/followups`). */
     finish: () => {
       const prompts = followupsFor(shown);
-      if (prompts.length) emit({ type: 'CUSTOM', name: 'followups', value: { prompts } });
+      if (prompts.length) emit({ type: EventType.STATE_DELTA, delta: [{ op: 'replace', path: '/followups', value: prompts }] });
     },
   };
+}
+
+/** The node tree of a new A2UI surface on the stream, or null. */
+function shownNode(e: AgUiEvent): { component: string; props?: unknown } | null {
+  if (e.type !== EventType.ACTIVITY_SNAPSHOT) return null;
+  const ops = (e.content as Record<string, unknown>)[A2UI_OPERATIONS_KEY];
+  return Array.isArray(ops) ? toNode(readSurface(ops as A2uiMessage[])) : null;
 }

@@ -81,32 +81,32 @@ RepoPilot has three zones: the Angular app renders and collects actions, a Node 
 
 &#91;embedded content: RepoPilot architecture · browser, agent server, external services\]
 
-The browser and server talk over one AG-UI event stream plus action POSTs; only the tool executor, after the approval gate, can change the repo.
+The browser and server speak two open protocols: **AG-UI** (v1.0) carries every run as one event stream, and **A2UI** (v1.0) describes every piece of UI the agent shows. Only the tool executor, after the approval gate, can change the repo.
 
 ### Request lifecycle
 
-1. The user types an intent; `AgentSessionService` POSTs it to `/runs` and opens the SSE stream.
+1. The user types an intent; `AgentSession` starts an AG-UI run (`HttpAgent`, `POST /api/agent` with a `RunAgentInput`: the new message, the app's frontend tools, page context, the selected repo in `forwardedProps`). The response is the run's event stream.
 2. The agent loop sends the prompt, catalog doc and tool list to the LLM.
-3. Read tools run at once through Octokit; each run emits a step event so `StepTimeline` updates live.
-4. The model returns UI nodes; the server validates them and streams them as UI events.
-5. `GenUiHost` validates again on the client and renders catalog components.
-6. A write tool call hits the approval gate: the run pauses and an `ApprovalCard` streams to the browser.
-7. The user approves, edits or rejects; the action is POSTed to `/actions`, and the run resumes.
+3. Every tool call streams as `TOOL_CALL_*` events, and every step as `STEP_*` events, so `StepTimeline` updates live. Read tools run at once.
+4. UI from tools (or from `render_ui`) is validated and converted into A2UI messages (`createSurface`, `updateComponents`, `updateDataModel`), sent as an AG-UI `ACTIVITY_SNAPSHOT` of type `a2ui-surface`.
+5. `@a2ui/angular` renders the surface against RepoPilot's A2UI catalog; each component's resolved props are validated again before it renders.
+6. A write tool call hits the approval gate: the approval surface streams, and the run ends as an AG-UI **interrupt**.
+7. The user approves, edits or rejects; the component's A2UI action becomes a new run whose `resume` entry answers the interrupt. The card updates in place through A2UI data model updates (`ACTIVITY_DELTA`).
 8. The executed action is written to the audit log with its inverse, so the Undo button can reverse it.
 
 ### Events on the stream
 
-Event names follow the AG-UI protocol; check its spec for the exact names in your version.
+All events are standard AG-UI 1.0 events (`@ag-ui/core`); RepoPilot-specific details live in `metadata.repopilot`, the shared state, or interrupt metadata.
 
-| Event kind | Carries | Updates in Angular |
+| AG-UI event | Carries | Updates in Angular |
 | --- | --- | --- |
-| Run started / finished | `runId`, status | `status` signal |
-| Text message chunk | Streaming text | `messages` signal |
-| Tool call start / end | Tool name, input, result | `steps` signal |
-| UI node (custom event) | `{ surfaceId, node }` | `surfaces` signal |
-| Approval required | `ApprovalCard` props | `pendingApproval` signal |
-| Client tool call | `navigate_to`, `highlight_lines`, `apply_table_filter` | Handled by `ClientToolsService` |
-| Error | Code, message | `status` + `ErrorFallback` |
+| `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | Outcome (success, interrupt, cancelled), token usage | Turn status, pending approval, token count |
+| `STATE_SNAPSHOT` / `STATE_DELTA` | Repo, model, pending approval, follow-up prompts | Follow-up chips |
+| `STEP_STARTED` / `STEP_FINISHED` | Step label, status, detail | Step timeline |
+| `REASONING_*` | The model's thought summary | Collapsible "How the agent reasoned" (text) |
+| `TOOL_CALL_START/ARGS/END/RESULT` | Every tool call; frontend tools are applied on `TOOL_CALL_END` | Table filter, navigation, diff highlight |
+| `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` (`a2ui-surface`) | A2UI messages for one surface | Rendered by `@a2ui/angular` |
+| `TEXT_MESSAGE_*` | The agent's reply | Answer text |
 
 ## 5. Tech stack
 
@@ -115,8 +115,8 @@ Angular on the front, a thin Node agent server in the middle, GitHub and an LLM 
 | Layer | Choice | Why |
 | --- | --- | --- |
 | Frontend framework | Angular (latest), standalone components, signals, OnPush | Your core skill; signals make streaming and shared state simple |
-| Dynamic rendering | Own `GenUiHostComponent` with `NgComponentOutlet`, or the A2UI Angular renderer | Own host shows you understand the mechanism; A2UI shows you know the standard |
-| Agent ↔ UI transport | AG-UI events over Server-Sent Events | Typed events for text, tool calls, state and UI; one-way stream plus a POST for user actions |
+| Dynamic rendering | A2UI v1.0 (`@a2ui/angular` + `@a2ui/web_core`) with RepoPilot's own catalog, generated from the Zod schemas | An open standard: the agent sends layout and data, never code; the app keeps its own components and design system |
+| Agent ↔ UI transport | AG-UI v1.0 (`@ag-ui/client` `HttpAgent`, `@ag-ui/encoder` on the server) | One POST per run, answered by its event stream: text, reasoning, tool calls, steps, shared state, A2UI activities, interrupts for approvals, cancellation |
 | Validation | Zod schemas shared by client and server | One source of truth for props and tool inputs |
 | Backend | Node + TypeScript (Express or Fastify) | Same language end to end; easy to share `catalog.ts` and `tools.ts` |
 | GitHub access | Octokit (REST + GraphQL) | GraphQL builds a health report in one request instead of about ten |
@@ -282,8 +282,8 @@ export class AgentSessionService {
 
   readonly isBusy = computed(() => this.status() !== 'idle');
 
-  send(prompt: string) { /* POST /runs, then open EventSource /runs/:id/events */ }
-  sendAction(event: UiEvent) { /* POST /runs/:id/actions */ }
+  send(prompt: string) { /* HttpAgent.runAgent(): POST /api/agent, events stream back */ }
+  decide(toolCallId: string, decision: 'approve' | 'reject') { /* runAgent({ resume: [...] }) */ }
 }
 ```
 
@@ -293,7 +293,7 @@ export class AgentSessionService {
 
 ### Renderer
 
-`GenUiHostComponent` takes one untrusted node, runs `validateNode()` in a `computed`, and renders the matching component through `NgComponentOutlet` with two inputs: `props` and an `emit` callback. `Grid` and `Section` nest more hosts for their children, so any layout the agent composes still uses only allowed components.
+Rendering is A2UI. `A2uiSurfaceView` (`<app-a2ui-surface>`) feeds a surface's A2UI messages to its own `A2uiRendererService`. The catalog is a standard A2UI catalog document generated from the shared Zod catalog, so A2UI validates every component and binding. Every entry renders through `A2uiNode`, which resolves the `{"@path"}` bindings, runs `validateNode()` on the result, and renders the matching component with `props` and an `emit` callback. `emit` dispatches an A2UI action. `Grid` and `Section` render their children as A2UI child references, so any layout the agent composes still uses only allowed components. Invalid data, or messages A2UI refuses, render `ErrorFallback` in place.
 
 ### Catalog component conventions
 
@@ -304,7 +304,7 @@ export class AgentSessionService {
 
 ### Client tools
 
-`ClientToolsService` listens for tool calls whose `side` is `client` and runs them with the Router or a component API. It then reports the result back to the agent, so the model knows the navigation happened.
+The browser declares its tools (`navigate_to`, `highlight_lines`, `apply_table_filter`) as AG-UI frontend tools in `RunAgentInput.tools`. The server validates each call, streams it as `TOOL_CALL_*` events and tells the model it was applied. The browser checks the arguments with the same schema and applies them with the Router or a component API. A table filter becomes an A2UI `updateDataModel` on the table's rows.
 
 ## 9. Backend agent loop
 
@@ -314,9 +314,9 @@ The server runs a standard tool-calling loop with one extra rule: any non-read t
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/runs` | Start a run with the user's prompt; returns `runId` |
-| GET | `/runs/:id/events` | SSE stream of AG-UI events for that run |
-| POST | `/runs/:id/actions` | User actions: approve, reject, edited form values, selections |
+| POST | `/api/agent` | AG-UI: one run per request (a prompt, a side question, or a `resume` answering an approval interrupt); the response is the run's event stream (SSE, or protobuf on request) |
+| GET | `/api/agent/capabilities` | AG-UI capability discovery |
+| GET | `/api/a2ui/catalog` | The A2UI catalog document |
 | GET | `/audit` | Audit log entries for the signed-in user |
 | POST | `/audit/:id/undo` | Run the inverse action for a reversible entry |
 
@@ -328,8 +328,8 @@ The server runs a standard tool-calling loop with one extra rule: any non-read t
 4. If the tool is `read`: run it with Octokit, emit a `STEP` event, return the result to the model.
 5. If the tool is `write` or `destructive`:
    1. For destructive tools, run it first with `dryRun: true` to get the exact effect.
-   2. Emit an `ApprovalCard` UI node, set the run to `awaiting-approval`, persist the run state, and end the stream.
-6. When `/actions` receives `approve`, reload the run, apply the user's edits or deselections to the tool input, execute it, write an audit entry, and resume the loop from step 2.
+   2. Stream the approval surface (A2UI), persist the run state, and end the run with an AG-UI interrupt.
+6. When a run's `resume` entry answers the interrupt with `approve`, reload the run, apply the user's edits or deselections to the tool input, execute it, write an audit entry, and resume the loop from step 2.
 7. On `reject`, return "user rejected" as the tool result so the model can explain or offer an alternative.
 8. The model's final answer usually includes UI nodes (`{ component, props }`), validated server-side before they are streamed.
 
@@ -434,7 +434,7 @@ export const uiSurfaces = pgTable('ui_surfaces', {
 ### In Angular
 
 - `SessionStore` holds `sessions`, `activeSessionId` and `activeSession` as signals; the History page and the side nav read from it.
-- Opening a session fills `AgentSessionService.surfaces` from stored nodes, so `GenUiHostComponent` renders them exactly as it renders live ones.
+- Opening a session replays its stored AG-UI events, so the A2UI surfaces render exactly as they did live.
 - The route is `/s/:sessionId`, so a session can be bookmarked or shared within the team.
 
 Interview point: because the UI is data, it can be stored, replayed and tested like any other data.

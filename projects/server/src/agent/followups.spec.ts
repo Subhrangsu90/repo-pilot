@@ -1,4 +1,5 @@
-import type { AgentEvent } from '@repopilot/shared';
+import { surfaceMessages, type AgUiEvent } from '@repopilot/shared';
+import { surfaceSnapshot } from '@repopilot/shared';
 import { followupsFor, trackFollowups } from './followups';
 
 describe('followups', () => {
@@ -13,29 +14,29 @@ describe('followups', () => {
   });
 
   it('records shown components and only sends chips when finish is called', () => {
-    const events: AgentEvent[] = [];
+    const events: AgUiEvent[] = [];
     const t = trackFollowups((e) => events.push(e));
-    t.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId: 's1', node: { component: 'PrList', props: {} } } });
+    t.emit(surfaceSnapshot('s1', surfaceMessages('s1', { component: 'PrList', props: { items: [] } })));
     expect(events).toHaveLength(1);
     t.finish();
+    // Sent as a change to the shared AG-UI state.
     expect(events.at(-1)).toEqual({
-      type: 'CUSTOM',
-      name: 'followups',
-      value: { prompts: ['Which PRs have failing CI?', 'Show only draft PRs', 'Show merged PRs'] },
+      type: 'STATE_DELTA',
+      delta: [{ op: 'replace', path: '/followups', value: ['Which PRs have failing CI?', 'Show only draft PRs', 'Show merged PRs'] }],
     });
   });
 
   it('does not offer health-report follow-ups for a pull request diff', () => {
-    const events: AgentEvent[] = [];
+    const events: AgUiEvent[] = [];
     const t = trackFollowups((e) => events.push(e));
-    const diff = { component: 'DiffViewer', props: {} };
-    t.emit({ type: 'CUSTOM', name: 'ui', value: { surfaceId: 's1', node: { component: 'Section', props: { title: 'Changes in #16', children: [diff] } } } });
+    const diff = { component: 'DiffViewer', props: { path: 'docs/api.md', lines: [] } };
+    t.emit(surfaceSnapshot('s1', surfaceMessages('s1', { component: 'Section', props: { title: 'Changes in #16', children: [diff] } })));
     t.finish();
-    expect(events.at(-1)).toEqual({ type: 'CUSTOM', name: 'followups', value: { prompts: ['Show my open PRs', 'Which PRs have failing CI?'] } });
+    expect(events.at(-1)).toEqual({ type: 'STATE_DELTA', delta: [{ op: 'replace', path: '/followups', value: ['Show my open PRs', 'Which PRs have failing CI?'] }] });
   });
 
   it('sends nothing when the run showed no UI', () => {
-    const events: AgentEvent[] = [];
+    const events: AgUiEvent[] = [];
     trackFollowups((e) => events.push(e)).finish();
     expect(events).toEqual([]);
   });

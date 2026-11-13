@@ -1,8 +1,20 @@
-import type { AgentEvent } from '@repopilot/shared';
+import {
+  A2UI_OPERATIONS_KEY,
+  EventType,
+  navigateTo,
+  propsOf,
+  readSurface,
+  ROOT_ID,
+  rootComponent,
+  stepMeta,
+  type A2uiMessage,
+  type AgUiEvent,
+} from '@repopilot/shared';
+import { EventSchemas } from '@ag-ui/core/schemas';
 import * as z from 'zod';
 import type { ChatMessage, LlmProvider, LlmReply, LlmRequest } from '../llm';
 import { LlmError, withFallback } from '../llm';
-import { resumeAgent, runAgent, type AgentDeps, type ExecutedChange, type PendingApproval } from './loop';
+import { interruptOf, resumeAgent, runAgent, type AgentDeps, type ExecutedChange, type PendingApproval } from './loop';
 import { buildToolDefs } from './prompt';
 import type { ActionTool, Plan } from '../tools/actions';
 import { executors, ToolError, type Executor } from '../tools/read-tools';
@@ -29,7 +41,7 @@ const prs: Executor<any> = async () => ({
 });
 
 function setup(provider: LlmProvider, overrides: Partial<AgentDeps> = {}) {
-  const events: AgentEvent[] = [];
+  const events: AgUiEvent[] = [];
   const thread: ChatMessage[] = [];
   const deps: AgentDeps = {
     provider,
@@ -45,8 +57,19 @@ function setup(provider: LlmProvider, overrides: Partial<AgentDeps> = {}) {
   return { events, thread, deps, run: (prompt: string) => runAgent(thread, prompt, deps) };
 }
 
-const ofType = <T extends AgentEvent['type']>(events: AgentEvent[], type: T) =>
-  events.filter((e): e is Extract<AgentEvent, { type: T }> => e.type === type);
+const ofType = <T extends AgUiEvent['type']>(events: AgUiEvent[], type: T) =>
+  events.filter((e): e is Extract<AgUiEvent, { type: T }> => e.type === type);
+
+/** A2UI surfaces the run created (ACTIVITY_SNAPSHOT), as surface id + root component. */
+const shown = (events: AgUiEvent[]) =>
+  ofType(events, EventType.ACTIVITY_SNAPSHOT).map((e) => {
+    const view = readSurface((e.content as Record<string, A2uiMessage[]>)[A2UI_OPERATIONS_KEY]);
+    return { surfaceId: view.surfaceId, component: rootComponent(view) };
+  });
+
+const stepLabels = (events: AgUiEvent[]) => ofType(events, EventType.STEP_STARTED).map((e) => stepMeta(e).label);
+const finished = (events: AgUiEvent[]) => ofType(events, EventType.STEP_FINISHED).map((e) => ({ id: e.stepName, ...stepMeta(e) }));
+const texts = (events: AgUiEvent[]) => ofType(events, EventType.TEXT_MESSAGE_CONTENT).map((e) => e.delta);
 
 describe('runAgent', () => {
   it('runs a read tool, streams its UI, then the model summary', async () => {
@@ -57,14 +80,18 @@ describe('runAgent', () => {
     const { events, run, thread } = setup(model);
     await run('Show my open PRs');
 
-    const ui = ofType(events, 'CUSTOM');
-    expect(ui).toHaveLength(1);
-    expect(ui[0].value).toMatchObject({ surfaceId: 'r1-c1', node: { component: 'PrList' } });
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['One open PR; CI is green.']);
+    expect(shown(events)).toEqual([{ surfaceId: 'r1-c1', component: 'PrList' }]);
+    expect(texts(events)).toEqual(['One open PR; CI is green.']);
 
-    const steps = ofType(events, 'STEP_STARTED').map((e) => e.stepName);
-    expect(steps).toEqual(['Understanding the request', 'Listing pull requests', 'Reviewing results']);
-    expect(ofType(events, 'STEP_FINISHED').every((e) => e.status === 'done')).toBe(true);
+    expect(stepLabels(events)).toEqual(['Understanding the request', 'Listing pull requests', 'Reviewing results']);
+    expect(finished(events).every((s) => s.status === 'done')).toBe(true);
+
+    // The call and its result are on the stream too (AG-UI tool call events).
+    expect(ofType(events, EventType.TOOL_CALL_START)).toEqual([expect.objectContaining({ toolCallId: 'c1', toolCallName: 'list_pull_requests' })]);
+    expect(JSON.parse(ofType(events, EventType.TOOL_CALL_ARGS)[0].delta)).toEqual({ state: 'open' });
+    expect(ofType(events, EventType.TOOL_CALL_RESULT)).toEqual([expect.objectContaining({ toolCallId: 'c1', content: '{"count":1}' })]);
+    // Every event is a valid AG-UI event.
+    for (const e of events) expect(() => EventSchemas.parse(e)).not.toThrow();
 
     // The model received the tool result, and the thread keeps the whole exchange.
     const second = model.requests[1].messages.at(-1);
@@ -82,7 +109,7 @@ describe('runAgent', () => {
     expect(called).toBe(false);
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(JSON.stringify(result.results[0].content)).toContain('limit');
-    expect(ofType(events, 'STEP_FINISHED').some((e) => e.status === 'error')).toBe(true);
+    expect(finished(events).some((s) => s.status === 'error')).toBe(true);
   });
 
   it('never runs an unknown non-read tool, even when an executor exists', async () => {
@@ -93,7 +120,7 @@ describe('runAgent', () => {
     await run('merge #15');
 
     expect(called).toBe(false);
-    expect(ofType(events, 'CUSTOM')).toHaveLength(0);
+    expect(shown(events)).toHaveLength(0);
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(JSON.stringify(result.results[0].content)).toContain('Unknown tool');
   });
@@ -104,7 +131,7 @@ describe('runAgent', () => {
     const { events, run } = setup(model);
     await run('x');
 
-    expect(ofType(events, 'CUSTOM')).toHaveLength(0);
+    expect(shown(events)).toHaveLength(0);
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(JSON.stringify(result.results[0].content)).toContain('ApprovalCard is shown by the app itself');
   });
@@ -120,7 +147,7 @@ describe('runAgent', () => {
 
     const firstResult = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(JSON.stringify(firstResult.results[0].content)).toContain('Invalid UI node');
-    expect(ofType(events, 'CUSTOM').map((e) => (e.name === 'ui' ? e.value.surfaceId : e.name))).toEqual(['r1-c2']);
+    expect(shown(events).map((s) => s.surfaceId)).toEqual(['r1-c2']);
   });
 
   it('never streams UI that fails validation', async () => {
@@ -128,7 +155,7 @@ describe('runAgent', () => {
     const model = scripted({ toolCalls: [{ id: 'c1', name: 'list_pull_requests', args: {} }] });
     const { events, run } = setup(model, { executors: { list_pull_requests: bad } });
     await run('x');
-    expect(ofType(events, 'CUSTOM')).toHaveLength(0);
+    expect(shown(events)).toHaveLength(0);
   });
 
   it('passes ToolError messages to the model', async () => {
@@ -153,8 +180,8 @@ describe('runAgent', () => {
     };
     const { events, run, thread } = setup(failing);
     await expect(run('Show my open PRs')).resolves.toEqual({ status: 'done' });
-    expect(ofType(events, 'CUSTOM')).toHaveLength(1);
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').at(-1)?.delta).toContain('could not write a summary');
+    expect(shown(events)).toHaveLength(1);
+    expect(texts(events).at(-1)).toContain('could not write a summary');
     // History stays consistent: the tool results are answered by an assistant turn.
     expect(thread.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
   });
@@ -194,7 +221,7 @@ describe('runAgent', () => {
 
     expect(model.requests).toHaveLength(2);
     expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'user', text: expect.stringContaining('Your last reply was empty') });
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['It is a small Angular app with 8 open PRs.']);
+    expect(texts(events)).toEqual(['It is a small Angular app with 8 open PRs.']);
     expect(thread.at(-1)).toMatchObject({ role: 'assistant', text: 'It is a small Angular app with 8 open PRs.' });
   });
 
@@ -202,7 +229,7 @@ describe('runAgent', () => {
     const model = scripted({ text: '' }, { text: '  ' });
     const { run, events } = setup(model);
     expect(await run('give details about this repo')).toEqual({ status: 'done' });
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual([expect.stringContaining('could not produce an answer')]);
+    expect(texts(events)).toEqual([expect.stringContaining('could not produce an answer')]);
     expect(model.requests).toHaveLength(2);
   });
 
@@ -211,14 +238,14 @@ describe('runAgent', () => {
     const { run, events } = setup(model);
     await run('Show my open PRs');
     expect(model.requests).toHaveLength(2);
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT')).toEqual([]);
+    expect(texts(events)).toEqual([]);
   });
 
   it('stops after the iteration limit', async () => {
     const loop = { toolCalls: [{ id: 'c', name: 'list_pull_requests', args: {} }] };
     const { events, run } = setup(scripted(loop, loop, loop, loop), { maxIterations: 3 });
     await run('x');
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').at(-1)?.delta).toContain('stopped after 3 steps');
+    expect(texts(events).at(-1)).toContain('stopped after 3 steps');
   });
 });
 
@@ -257,13 +284,31 @@ function fakeAction(ids = [118, 131, 140], plan?: Plan) {
 
 const closeCall = (id = 'c1') => ({ id, name: 'bulk_update_issues', args: { issueNumbers: [118, 131, 140], action: 'close' } });
 
-const cards = (events: AgentEvent[]) =>
-  ofType(events, 'CUSTOM')
-    .filter((e) => e.name === 'ui' && e.value.node.component === 'ApprovalCard')
-    .map((e) => (e.value as { node: { props: Record<string, unknown> } }).node.props);
+/**
+ * The approval card's props after each change: its A2UI surface is created once
+ * (ACTIVITY_SNAPSHOT), then updated in place by data model updates (ACTIVITY_DELTA).
+ */
+const cards = (events: AgUiEvent[]) => {
+  const ops = new Map<string, A2uiMessage[]>();
+  const out: Record<string, unknown>[] = [];
+  for (const e of events) {
+    if (e.type === EventType.ACTIVITY_SNAPSHOT) ops.set(e.messageId, [...(e.content as Record<string, A2uiMessage[]>)[A2UI_OPERATIONS_KEY]]);
+    else if (e.type === EventType.ACTIVITY_DELTA) ops.get(e.messageId)?.push(...e.patch.map((p) => (p as { value: A2uiMessage }).value));
+    else continue;
+    const view = readSurface(ops.get(e.messageId) ?? []);
+    if (rootComponent(view) === 'ApprovalCard') out.push(propsOf(view, ROOT_ID));
+  }
+  return out;
+};
+
+/** Arguments of the client tool calls on the stream that the browser would apply (they pass the tool's schema). */
+const clientCalls = (events: AgUiEvent[]) =>
+  ofType(events, EventType.TOOL_CALL_START)
+    .filter((s) => ['highlight_lines', 'navigate_to', 'apply_table_filter'].includes(s.toolCallName))
+    .map((s) => ({ name: s.toolCallName, args: JSON.parse(ofType(events, EventType.TOOL_CALL_ARGS).find((a) => a.toolCallId === s.toolCallId)!.delta) }));
 
 describe('client tools', () => {
-  it('validates the input and hands the call to the browser, without an executor', async () => {
+  it('validates the input and hands the call to the browser as AG-UI tool call events, without an executor', async () => {
     const model = scripted(
       { toolCalls: [{ id: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }] },
       { text: 'The rate limit is set on lines 12–18.' },
@@ -271,18 +316,45 @@ describe('client tools', () => {
     const { run, events } = setup(model);
     await run('take me to the auth changes');
 
-    const sent = ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool');
-    expect(sent.map((e) => e.value)).toEqual([{ callId: 'h1', name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }]);
-    expect(ofType(events, 'STEP_FINISHED').find((e) => e.stepId.includes('h1'))).toMatchObject({ status: 'done', detail: 'src/auth/login.js:12–18' });
+    expect(clientCalls(events)).toEqual([{ name: 'highlight_lines', args: { path: 'src/auth/login.js', from: 12, to: 18 } }]);
+    expect(ofType(events, EventType.TOOL_CALL_END).map((e) => e.toolCallId)).toEqual(['h1']);
+    expect(finished(events).find((s) => s.id.includes('h1'))).toMatchObject({ status: 'done', detail: 'src/auth/login.js:12–18' });
     expect(model.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', results: [{ content: { sentToApp: true } }] });
   });
 
-  it('never sends invalid client tool input to the browser', async () => {
+  it('sends invalid client tool input only as the model wrote it, with an error result the browser will not apply', async () => {
     const model = scripted({ toolCalls: [{ id: 'n1', name: 'navigate_to', args: { page: 'pull_request' } }] }, { text: 'Sorry.' });
     const { run, events } = setup(model);
     await run('open the PR');
-    expect(ofType(events, 'CUSTOM').filter((e) => e.name === 'client_tool')).toEqual([]);
+    const [call] = clientCalls(events);
+    expect(navigateTo.input.safeParse(call.args).success).toBe(false);
+    expect(ofType(events, EventType.TOOL_CALL_RESULT)[0].content).toContain('needs a number');
     expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('needs a number');
+  });
+
+  it('refuses a client tool the page did not declare', async () => {
+    const model = scripted({ toolCalls: [{ id: 'h1', name: 'highlight_lines', args: { path: 'a.js', from: 1, to: 2 } }] }, { text: 'ok' });
+    const { run } = setup(model, { clientTools: new Set(['navigate_to']) });
+    await run('x');
+    expect(JSON.stringify(model.requests[1].messages.at(-1))).toContain('not available on this page');
+  });
+});
+
+describe('reasoning and usage', () => {
+  it('streams the model\'s thought summary as an AG-UI reasoning span and reports token usage', async () => {
+    const usage: unknown[] = [];
+    const model = scripted({ text: 'Hi.', reasoning: 'The user greets me.', usage: { provider: 'fake', model: 'fake-1', inputTokens: 10, outputTokens: 3 } });
+    const { run, events } = setup(model, { onUsage: (u) => void usage.push(u) });
+    await run('hello');
+    expect(events.map((e) => e.type).filter((t) => t.startsWith('REASONING'))).toEqual([
+      'REASONING_START',
+      'REASONING_MESSAGE_START',
+      'REASONING_MESSAGE_CONTENT',
+      'REASONING_MESSAGE_END',
+      'REASONING_END',
+    ]);
+    expect(ofType(events, EventType.REASONING_MESSAGE_CONTENT)[0].delta).toBe('The user greets me.');
+    expect(usage).toEqual([{ provider: 'fake', model: 'fake-1', inputTokens: 10, outputTokens: 3 }]);
   });
 });
 
@@ -322,12 +394,18 @@ describe('approval gate', () => {
     expect(cards(events)).toEqual([
       expect.objectContaining({ toolCallId: 'c1', risk: 'destructive', status: 'pending', selected: [118, 131, 140] }),
     ]);
-    expect(ofType(events, 'CUSTOM').at(-1)).toEqual({
-      type: 'CUSTOM',
-      name: 'approval',
-      value: { runId: 'r1', toolCallId: 'c1', surfaceId: 'r1-c1' },
+    // The run ends as an AG-UI interrupt for this call; the call stays open (no result yet).
+    expect(interruptOf((outcome as { pending: PendingApproval }).pending)).toMatchObject({
+      id: 'c1',
+      reason: 'tool_approval',
+      toolCallId: 'c1',
+      message: 'Close 3 issues',
+      responseSchema: expect.objectContaining({ type: 'object' }),
+      metadata: { repopilot: { surfaceId: 'r1-c1', tool: 'bulk_update_issues', risk: 'destructive' } },
     });
-    expect(ofType(events, 'STEP_STARTED').map((e) => e.stepName)).toContain('Dry run · Updating issues');
+    expect(ofType(events, EventType.TOOL_CALL_START).map((e) => e.toolCallId)).toEqual(['c1']);
+    expect(ofType(events, EventType.TOOL_CALL_RESULT)).toEqual([]);
+    expect(stepLabels(events)).toContain('Dry run · Updating issues');
     expect(thread.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
@@ -465,7 +543,7 @@ describe('approval gate', () => {
 
     expect(await run('x')).toEqual({ status: 'done' });
     expect(calls.execute).toEqual([]);
-    expect(ofType(events, 'CUSTOM')).toHaveLength(0);
+    expect(shown(events)).toHaveLength(0);
     const result = model.requests[1].messages.at(-1) as Extract<ChatMessage, { role: 'tool' }>;
     expect(result.results[0].content).toEqual({ nothingToChange: true });
   });
@@ -510,7 +588,7 @@ describe('review fallback (PR review page)', () => {
     expect(thread.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     expect(thread[2]).toMatchObject({ text: expect.stringContaining('submit_pull_request_review was not called') });
     // The reply before the reminder is held back (it may claim a draft that does not exist).
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).toEqual(['Sorry.']);
+    expect(texts(events)).toEqual(['Sorry.']);
 
     const resumed = await resumeAgent(thread, pending, { approve: true, selected: [] }, deps);
     expect(resumed).toEqual({ status: 'done' }); // no second draft after the decision
@@ -530,7 +608,7 @@ describe('review fallback (PR review page)', () => {
     expect(outcome.status).toBe('awaiting-approval');
     expect((outcome as { pending: PendingApproval }).pending.synthetic).toBeUndefined();
     expect(inputs).toEqual([{ number: 16, event: 'COMMENT', summary: 'Docs only.', comments: [] }]);
-    expect(ofType(events, 'TEXT_MESSAGE_CONTENT').map((e) => e.delta)).not.toContain('I have drafted a review for pull request #16.');
+    expect(texts(events)).not.toContain('I have drafted a review for pull request #16.');
   });
 
   it('owes a review in Ask too, when the user asks for one and the run read exactly one pull request', async () => {

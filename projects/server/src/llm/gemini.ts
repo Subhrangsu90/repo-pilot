@@ -42,7 +42,8 @@ export function createGemini(apiKey: string, model: string, timeoutMs = 45_000):
               ],
             }
           : {}),
-        generationConfig: { temperature: 0.2 },
+        // includeThoughts: Gemini adds thought summaries, streamed to the user as AG-UI reasoning.
+        generationConfig: { temperature: 0.2, thinkingConfig: { includeThoughts: true } },
       };
 
       let res: Response;
@@ -65,6 +66,12 @@ export function createGemini(apiKey: string, model: string, timeoutMs = 45_000):
       const json = (await res.json()) as {
         candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
         promptFeedback?: { blockReason?: string };
+        usageMetadata?: {
+          promptTokenCount?: number;
+          candidatesTokenCount?: number;
+          thoughtsTokenCount?: number;
+          cachedContentTokenCount?: number;
+        };
       };
       const candidate = json.candidates?.[0];
       if (!candidate) {
@@ -72,8 +79,28 @@ export function createGemini(apiKey: string, model: string, timeoutMs = 45_000):
       }
 
       const parts = candidate.content?.parts ?? [];
+      const reasoning = parts
+        .filter((p) => p.thought && typeof p.text === 'string')
+        .map((p) => p.text)
+        .join('\n')
+        .trim();
+      const u = json.usageMetadata;
       return {
         model,
+        ...(reasoning ? { reasoning } : {}),
+        ...(u
+          ? {
+              usage: {
+                provider: 'gemini',
+                model,
+                inputTokens: u.promptTokenCount,
+                // Gemini counts thoughts apart from the answer; AG-UI counts them inside the output.
+                outputTokens: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+                ...(u.thoughtsTokenCount ? { reasoningTokens: u.thoughtsTokenCount } : {}),
+                ...(u.cachedContentTokenCount ? { cachedInputTokens: u.cachedContentTokenCount } : {}),
+              },
+            }
+          : {}),
         text: parts
           .filter((p) => typeof p.text === 'string' && !p.thought)
           .map((p) => p.text)

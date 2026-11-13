@@ -10,7 +10,7 @@ Full design: [docs/project-documentation.md](docs/project-documentation.md).
 | --- | --- | --- |
 | `projects/web` | Angular 22 app (`@repopilot/web`) | `npm run dev:web` → `http://localhost:4200` |
 | `projects/server` | Node agent server, Fastify + tsx (`@repopilot/server`) | `npm run dev:server` → `http://localhost:3000/api/health` |
-| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, prompt doc, tools, GitHub URLs | `npm test -w @repopilot/shared` |
+| `projects/shared` | Contract shared by both (`@repopilot/shared`): Zod catalog, `validateNode`, A2UI conversion (`a2ui.ts`), AG-UI conventions + event builders (`events.ts`, `agui.ts`), prompt doc, tools, GitHub URLs | `npm test -w @repopilot/shared` |
 
 `@repopilot/shared` exports TypeScript source (no build step). The web app resolves it
 through a `paths` entry in `projects/web/tsconfig.json`; the server runs it through tsx.
@@ -72,6 +72,81 @@ does not check Angular templates; `ng build` does.
   Landing, layout, Ask and Approval (done 2026-11-11), then PR review, Release builder, Audit log
   and History one at a time as working features.
 
+## Agent ↔ UI protocols: AG-UI transport + A2UI rendering (2026-11-13, branch `feat/a2ui-variant`)
+
+User's decision: AG-UI for the transport and A2UI for dynamic rendering, using their features instead
+of RepoPilot's own wire format; the product goal is unchanged. Versions: `@ag-ui/*` 1.0.4 (protocol
+1.0), `@a2ui/angular` 0.14.0 + `@a2ui/web_core` 0.15.0 (protocol 1.0). `@a2ui/angular` declares
+Angular ^21 as a peer: root `.npmrc` has `legacy-peer-deps=true` (npm `overrides` cannot widen a
+peer range); it runs on Angular 22, covered by the web tests. Remove the line when it accepts 22.
+Do not write A2UI/AG-UI code from memory: read the installed packages' typings
+(`node_modules/@a2ui/*`, `node_modules/@ag-ui/*`), or the `a2ui` skill in `.agents/skills/`.
+
+- **Transport (AG-UI).** One endpoint, `POST /api/agent` (`server/src/routes/agent.ts`), takes an
+  AG-UI `RunAgentInput` (validated with `RunAgentInputSchema`) and answers with that run's event
+  stream: SSE, or AG-UI protobuf only when Accept names `application/vnd.ag-ui.event+proto`.
+  `threadId` / `runId` (UUIDs) come from the client. The server keeps the conversation (with
+  provider `raw` parts) and reads only the new user message from `input.messages`, so a client
+  cannot rewrite history or forge tool results. `forwardedProps` (`ForwardedProps` in
+  `shared/src/events.ts`): `repo`, `model`, `reviewPullRequest`, `a2uiAction`. `context`: page
+  context, appended to the system prompt as information. `GET /api/agent/capabilities` (AG-UI
+  `AgentCapabilities`), `GET /api/a2ui/catalog`. Removed: `POST /api/runs`,
+  `GET /api/runs/:id/events`, `POST /api/runs/:id/actions`.
+- **Events used.** `RUN_STARTED` (protocolVersion 1.0) → `STATE_SNAPSHOT` (`RepoPilotState`: repo,
+  model, pendingApproval, followups) → `STEP_STARTED/FINISHED` (`stepName` = unique step id;
+  label/status/detail in `metadata.repopilot`) → `REASONING_*` (Gemini thought summaries with
+  `includeThoughts`, Ollama `thinking`; shown as text) → `TOOL_CALL_START/ARGS/END/RESULT` for every
+  tool call → `ACTIVITY_SNAPSHOT/DELTA` (A2UI surfaces) → `TEXT_MESSAGE_*` → `STATE_DELTA`
+  (`/followups`, `/pendingApproval`) → `RUN_FINISHED` with `outcome` success | interrupt |
+  cancelled and `usage` (summed per provider/model), or `RUN_ERROR`. `StreamGuard` (in
+  `shared/src/agui.ts`) closes open steps/messages/tool calls before the run ends, since AG-UI
+  clients reject an unbalanced stream. Builders (`stepStarted`, `surfaceSnapshot`, `toolCall`, …)
+  are in shared so tests on both sides build real streams.
+- **Approvals = AG-UI interrupts.** A paused change ends the run with outcome `interrupt`
+  (`interruptOf()`: id = the paused tool call id, reason `tool_approval`, `responseSchema` =
+  `ApprovalDecision`, `metadata.repopilot.surfaceId`). The answer is a new run whose `resume` entry
+  carries `{ decision, selected?, edits? }`; `status: 'cancelled'` = reject. Answered once (second
+  → 404); same owner/repo/edits rules as before. The resumed run re-starts and finishes the
+  `approval-<id>` step and sends the tool's `TOOL_CALL_RESULT`.
+- **Client tools = AG-UI frontend tools.** The browser declares `navigate_to`, `highlight_lines`,
+  `apply_table_filter` in `RunAgentInput.tools` (by name; the server uses its own specs and refuses
+  undeclared ones). The call is streamed once validated; the browser checks it with the same
+  schema and applies it on `TOOL_CALL_END`; the server answers the model itself.
+- **Cancellation.** Stop in Ask aborts the HttpAgent fetch; the server sees the response close,
+  aborts the run (outcome `cancelled`). An approved change that started still completes.
+- **Rendering (A2UI v1.0).** `shared/src/a2ui.ts`: `surfaceMessages(surfaceId, node)` validates each
+  node and flattens the tree into `createSurface` → `updateComponents` (ids `root`, `root_0`, …;
+  UAX #31 identifiers; children as id lists; every data prop a `{"@path": "/<id>/<prop>"}` binding)
+  → `updateDataModel` (validated props with defaults). Invalid child → ErrorFallback in its slot;
+  > 200 components truncated with a note. `propsUpdate` / `propUpdate` change data in place
+  (approval card status, agent table filters). `catalogDocument()` = the A2UI catalog JSON
+  (`repopilot:catalog/v1`), generated from the Zod catalog (data props accept literal or
+  DataBinding; Grid/Section `children` = ChildList). Carried over AG-UI as the AG-UI A2UI
+  middleware does: `ACTIVITY_SNAPSHOT` type `a2ui-surface`, id `a2ui-surface-<surfaceId>`, content
+  `{ a2ui_operations: [...] }`; updates are `ACTIVITY_DELTA` JSON Patch appends.
+- **Browser.** `core/agent-session.ts`: one `HttpAgent` per run (`AGENT_FACTORY`, swappable in
+  tests); a fresh agent lets side questions run while an interrupt waits. 401 → `/signin`.
+  `core/agent-run.ts` is the pure reducer over AG-UI events (surfaces = operation lists;
+  `filterTables` appends an `updateDataModel` of the rows, `base` keeps what the agent sent).
+  `genui/a2ui-surface.ts` (`<app-a2ui-surface [operations] | [node] [emit]>`, own
+  `A2uiRendererService` per view, incremental apply, rebuild when the list no longer extends,
+  ErrorFallback when A2UI refuses a message), `genui/a2ui-catalog.ts` (`Catalog.fromJson` →
+  `AngularCatalog`), `genui/a2ui-node.ts` (resolves bindings, validates with `validateNode`, renders
+  the registered component; `emit` → `surface.dispatchAction` → A2UI `action` → `UiEvent` with
+  `action` → forwarded as `forwardedProps.a2uiAction`). App-built nodes (Issues table, PR cards)
+  also render through A2UI (`[node]`). `GenUiHost` is gone.
+- **Stored runs.** `runs.events` now hold AG-UI events. Runs saved before 2026-11-13 are upgraded
+  when read (`server/src/agent/legacy.ts`), so old sessions still reopen and refresh. Refresh
+  returns `{ operations }` (A2UI) instead of a node.
+- Verified live (2026-11-13, dev-mode server on :3100, Gemma `gemma4:e2b`, repopilot-demo): "Show my
+  open PRs" streamed reasoning, tool call, A2UI PrList, follow-ups, usage; "Close all open wontfix
+  issues" → A2UI ApprovalCard for #9–#11 → interrupt → resume reject → card updated by data
+  delta, model summarised, second answer 404, issues untouched. Not tried yet: clicking through
+  the pages in a browser, any run with Gemini (incl. `includeThoughts` on the configured Flash
+  models), approve on a live server, protobuf with a real client.
+- Bundle: initial 341 kB (budget 500); A2UI (~0.9 MB raw incl. Lit basic catalog and zod 3) and
+  AG-UI client (~0.24 MB raw incl. protobuf) are in lazy app chunks only.
+
 ## Design sources (claude.ai artifacts, owned by the user)
 
 - Design system "RepoPilot": <https://claude.ai/artifact/Tb41Yu1ZK5M24zNnKxMoGX> — read
@@ -98,7 +173,11 @@ does not check Angular templates; `ng build` does.
   `https://github.com` or `api.github.com` literals elsewhere (tests excepted).
 
 - The agent renders **only** catalog components. Every node passes `validateNode()` on
-  the server and again in `GenUiHost` on the client. Invalid → `ErrorFallback`.
+  the server (`surfaceMessages`), A2UI's own catalog validation in the browser, and
+  `validateNode()` again on the resolved props in `A2uiNode`. Invalid → `ErrorFallback`.
+- Agent ↔ UI traffic is AG-UI events only, and UI is A2UI messages only (see the protocols
+  section). No custom event shapes: RepoPilot specifics go in `metadata.repopilot`, shared
+  state, `forwardedProps` or interrupt metadata.
 - Model output is never rendered as HTML: no `innerHTML`, no `bypassSecurityTrust*`.
   Raw payloads, diffs and code are shown as text.
 - Every array in a props schema has `.max()`.
@@ -115,6 +194,9 @@ does not check Angular templates; `ng build` does.
   calls, and are keyboard accessible.
 - Adding a catalog component: schema + entry in `projects/shared/src/catalog.ts`, then
   register it in `projects/web/src/app/genui/registry.ts` (missing registration = compile error).
+  The A2UI catalog document follows automatically. A new container (child nodes) must be added to
+  `isContainer()` in `shared/src/a2ui.ts` and take `childRefs` + `surfaceId` inputs, rendering
+  `<a2ui-v09-component-host>` per child as Grid and Section do.
 - Styling: Tailwind v4 utilities over the design-system tokens in `projects/web/src/styles.css`.
   Raw vars keep DS names (`--surface-2`); utilities: `bg-bg`, `bg-surface-1..3`, `border-border`,
   `border-border-strong`, `text-fg` / `text-fg-muted` / `text-fg-faint` (DS `text*`), `primary`,
@@ -319,20 +401,24 @@ does not check Angular templates; `ng build` does.
         picker is now `shared/ui/repo-picker.ts`, used by the nav and Settings. Avatars and links
         only from `avatars.githubusercontent.com` / `github.com`.
   - [ ] Deploy (hosted Postgres): host not chosen yet.
+- [x] AG-UI + A2UI (branch `feat/a2ui-variant`, 2026-11-13, not committed yet): the custom SSE
+      protocol and GenUiHost replaced by AG-UI 1.0 and A2UI 1.0 (protocols section above). Ask
+      gained Stop, the agent's reasoning (collapsible, text) and token usage per answer.
 
 ## Agent server notes
 
-- `POST /api/runs {prompt, threadId?, model?: 'cloud'|'local'}` → `{runId, threadId}` (`model`
-  omitted = `LLM_PROVIDER`; local = Ollama; cloud = the configured cloud provider, else Gemini); `GET /api/runs/:id/events` is SSE with
-  AG-UI-named events (`projects/shared/src/events.ts`). Runs buffer events, so late clients replay.
+- `POST /api/agent` (AG-UI, see the protocols section) is the only run endpoint. `model` in
+  `forwardedProps` (omitted = `LLM_PROVIDER`; local = Ollama; cloud = the configured cloud
+  provider, else Gemini). Runs buffer their events for the store; a client that disconnects
+  cancels the run.
 - Read tools return `{ data (for the model), ui (UiNode for the user), detail (timeline) }`. UI is
   validated in the loop before streaming.
 - Write/destructive tools live in `projects/server/src/tools/actions.ts` as `{ plan, execute }`.
   `plan` only reads (dry run) and returns a card draft + the item ids; `execute(input, ids)` is only
   called by `resumeAgent` after approval. The model has no `dryRun` input. A paused call
-  (`PendingApproval`) sits on the in-memory `Thread` until answered; new prompts on that thread
-  get 409. `POST /api/runs/:runId/actions {toolCallId, decision, selected?}` → new run on the same
-  thread; the client streams it into the same turn (`awaiting-approval` turn status).
+  (`PendingApproval`) sits on the in-memory `Thread` until a run's `resume` entry answers its
+  interrupt; new prompts on that thread run as read-only side questions. The client streams the
+  resumed run into the same turn (`awaiting-approval` turn status).
 - Persistence: `runs.ts` calls `onRunFinished` once per run → `Store.saveRun` (upserts the session,
   inserts the run). `ensureThread` reloads a thread from Postgres when it is not in memory (new prompt
   on an old session, or POST /actions for a pending run after a restart). Every approved change calls
@@ -354,8 +440,8 @@ does not check Angular templates; `ng build` does.
 - `GET /api/overview` → `{repo, openPullRequests, openIssues, rateLimit, viewer}` (one GraphQL call)
   for the nav counts and the API quota in Settings; the client reloads it after each run.
 - Follow-up chips: `agent/followups.ts` picks up to 3 prompts from the components a run showed and
-  sends `CUSTOM followups` before RUN_FINISHED (not while an approval waits). Only prompts the
-  current tools can answer.
+  sends them as a `STATE_DELTA` on `/followups` before RUN_FINISHED (not while an approval
+  waits). Only prompts the current tools can answer.
 - ApprovalCard focuses the card itself, never Approve (a stray Enter must not approve). "Edit
   request" rejects the change and puts the prompt back in the composer (`AgentSession.draft`).
   ErrorFallback "Ask the agent to retry" sends a new prompt with the reason.

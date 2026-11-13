@@ -1,6 +1,6 @@
 import { Component, computed, input } from '@angular/core';
+import { ComponentHostComponent, type Child } from '@a2ui/angular';
 import { EmitFn, PropsOf } from '@repopilot/shared';
-import { GenUiHost } from '../genui-host';
 
 // Literal class strings so Tailwind finds them. One column on phones.
 const COLUMNS: Record<number, string> = {
@@ -10,14 +10,18 @@ const COLUMNS: Record<number, string> = {
   4: 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4',
 };
 
+/**
+ * Lays out its children in columns. The children are A2UI component refs of
+ * the same surface, each rendered (and validated) by its own A2UI host.
+ */
 @Component({
   selector: 'app-grid',
-  imports: [GenUiHost],
+  imports: [ComponentHostComponent],
   host: { class: 'block' },
   template: `
     <div class="grid gap-3" [class]="columnsClass()">
-      @for (child of props().children; track $index) {
-        <app-genui-host [node]="child" [emit]="emit() ?? noop" />
+      @for (child of childRefs(); track child.id) {
+        <a2ui-v09-component-host class="block h-full min-w-0" [componentKey]="child" [surfaceId]="surfaceId()" />
       }
     </div>
   `,
@@ -25,7 +29,8 @@ const COLUMNS: Record<number, string> = {
 export class Grid {
   readonly props = input.required<PropsOf<'Grid'>>();
   readonly emit = input<EmitFn>();
+  readonly childRefs = input<Child[]>([]);
+  readonly surfaceId = input<string>('');
 
-  protected readonly noop: EmitFn = () => {};
   protected readonly columnsClass = computed(() => COLUMNS[this.props().columns] ?? COLUMNS[2]);
 }

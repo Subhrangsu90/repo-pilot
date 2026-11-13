@@ -4,7 +4,7 @@ import { Component, computed, inject } from '@angular/core';
 import { RepoChoice } from '../../core/repo';
 import { RouterLink } from '@angular/router';
 import type { PropsOf } from '@repopilot/shared';
-import { GenUiHost } from '../../genui/genui-host';
+import { A2uiSurfaceView } from '../../genui/a2ui-surface';
 
 interface PullsResponse {
   repo: string;
@@ -13,12 +13,12 @@ interface PullsResponse {
 
 /**
  * Open pull requests, each with a way into the agent review (Screen Spec gap
- * "pull request list page"). Cards go through GenUiHost, so they are validated
+ * "pull request list page"). Cards render as A2UI surfaces, so they are validated
  * like any agent output.
  */
 @Component({
   selector: 'app-pull-list',
-  imports: [GenUiHost, RouterLink],
+  imports: [A2uiSurfaceView, RouterLink],
   host: { class: 'block' },
   template: `
     <div class="mx-auto flex w-full max-w-[1120px] flex-col gap-6 px-4 py-8 sm:px-8">
@@ -44,7 +44,7 @@ interface PullsResponse {
         <ul class="flex flex-col gap-2">
           @for (pr of items(); track pr.number) {
             <li class="flex flex-wrap items-center gap-3">
-              <app-genui-host class="min-w-0 flex-[1_1_480px]" [node]="{ component: 'PrCard', props: pr }" />
+              <app-a2ui-surface class="min-w-0 flex-[1_1_480px]" [node]="{ component: 'PrCard', props: pr }" />
               <a class="btn" [routerLink]="['/pulls', pr.number]">Review #{{ pr.number }}</a>
             </li>
           } @empty {

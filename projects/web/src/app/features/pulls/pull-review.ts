@@ -8,7 +8,7 @@ import { AgentSession } from '../../core/agent-session';
 import { onRepoSwitch, RepoChoice } from '../../core/repo';
 import { PR_REVIEW_ON_PAGE } from '../../genui/components/pr-review';
 import { StepTimeline } from '../../genui/components/step-timeline';
-import { GenUiHost } from '../../genui/genui-host';
+import { A2uiSurfaceView } from '../../genui/a2ui-surface';
 import { PrHeader, PrInfo } from '../../shared/ui/pr-header';
 
 /**
@@ -19,7 +19,7 @@ import { PrHeader, PrInfo } from '../../shared/ui/pr-header';
  */
 @Component({
   selector: 'app-pull-review',
-  imports: [GenUiHost, PrHeader, RouterLink, StepTimeline],
+  imports: [A2uiSurfaceView, PrHeader, RouterLink, StepTimeline],
   providers: [AgentSession, { provide: PR_REVIEW_ON_PAGE, useValue: true }],
   host: { class: 'block' },
   template: `
@@ -64,7 +64,7 @@ import { PrHeader, PrInfo } from '../../shared/ui/pr-header';
             }
 
             @for (surface of surfaces(t); track surface.surfaceId) {
-              <app-genui-host class="animate-genui-enter" [node]="surface.node" [emit]="onEmit" />
+              <app-a2ui-surface class="animate-genui-enter" [operations]="surface.operations" [emit]="onEmit" />
             }
 
             @if (t.actionError) {

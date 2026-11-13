@@ -1,25 +1,14 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import * as z from 'zod';
-import { componentNames, githubUrl, type AgentEvent, type ModelOption } from '@repopilot/shared';
+import { componentNames, githubUrl, type AgUiEvent, type ModelOption } from '@repopilot/shared';
 import { config, type Config } from './config';
 import { createAuth } from './auth';
-import { trackFollowups } from './agent/followups';
-import { resumeAgent, runAgent, type AgentDeps } from './agent/loop';
+import { type AgentDeps } from './agent/loop';
 import { buildSystemPrompt, buildToolDefs } from './agent/prompt';
-import { readOnlyTools, sideHistory } from './agent/side';
-import {
-  dropThread,
-  findPendingByRun,
-  getThread,
-  isTerminal,
-  onRunFinished,
-  restoreThread,
-  runOwner,
-  startRun,
-  subscribe,
-  ThreadBusyError,
-} from './agent/runs';
+import { dropThread, getThread, onRunFinished, restoreThread, type RunControl, type Thread } from './agent/runs';
+import { notice } from '@repopilot/shared';
 import { openDb } from './db/client';
+import { registerAgentRoutes } from './routes/agent';
 import { registerAuditRoutes } from './routes/audit';
 import { registerSessionRoutes } from './routes/sessions';
 import { Store } from './store';
@@ -304,15 +293,6 @@ app.get<{ Params: { number: string } }>('/api/pulls/:number', async (req, reply)
   }
 });
 
-const StartRunBody = z.object({
-  prompt: z.string().trim().min(1).max(2000),
-  threadId: z.uuid().optional(),
-  model: z.enum(['cloud', 'local']).optional(),
-  reviewPullRequest: z.number().int().positive().optional(),
-  /** The repository picked in the app; a conversation stays on the repo it started with. */
-  repo: z.string().regex(REPO_PATTERN, 'Use owner/name').optional(),
-});
-
 /** The UI's Cloud / Local switch. Cloud keeps a configured cloud provider, else Gemini. */
 function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
   if (model === 'local') return 'ollama';
@@ -322,14 +302,13 @@ function providerFor(model: ModelOption | undefined): Config['LLM_PROVIDER'] {
 
 function agentDeps(
   user: { login: string; ctx: ToolContext },
-  threadId: string,
-  model: ModelOption | undefined,
-  emit: (e: AgentEvent) => void,
-  run: { id: string; signal: AbortSignal },
-  reviewPullRequest?: number,
+  thread: Thread,
+  run: RunControl,
+  emit: (e: AgUiEvent) => void,
+  extra: Partial<AgentDeps>,
 ): AgentDeps {
-  const provider = createProvider({ ...config, LLM_PROVIDER: providerFor(model) }, (err) =>
-    emit({ type: 'STEP_FINISHED', stepId: `${run.id}-fallback`, status: 'error', detail: `${err.message}; trying ${config.GEMINI_FALLBACK_MODEL}` }),
+  const provider = createProvider({ ...config, LLM_PROVIDER: providerFor(thread.model) }, (err) =>
+    notice(emit, `${run.id}-fallback`, 'Switching model', 'error', `${err.message}; trying ${config.GEMINI_FALLBACK_MODEL}`),
   );
   return {
     provider,
@@ -341,11 +320,11 @@ function agentDeps(
     emit,
     runId: run.id,
     signal: run.signal,
-    reviewPullRequest,
+    onUsage: run.addUsage,
     // The audit log records who approved each change.
     onExecuted: store
       ? async (change) =>
-          void (await store.recordAudit(threadId, {
+          void (await store.recordAudit(thread.id, {
             ...change,
             approver: user.login,
             repo: user.ctx.repo ?? '',
@@ -353,150 +332,18 @@ function agentDeps(
             inverse: change.inverse && user.ctx.repo ? pinRepo(change.inverse, user.ctx.repo) : change.inverse,
           }))
       : undefined,
+    ...extra,
   };
 }
 
-app.post('/api/runs', async (req, reply) => {
-  const parsed = StartRunBody.safeParse(req.body);
-  if (!parsed.success) {
-    return reply.code(400).send({ error: "Send { prompt: string, threadId?: uuid, model?: 'cloud' | 'local' }." });
-  }
-  if (!githubReady) return reply.code(503).send({ error: NO_GITHUB });
-  const me = who(req);
-  await ensureThread(parsed.data.threadId);
-  const existing = getThread(parsed.data.threadId);
-  // Only the person who started a conversation may continue it.
-  if (existing?.owner && existing.owner !== me.login) return reply.code(404).send({ error: 'Conversation not found.' });
-  // A conversation stays on its repository; another repo means a new chat.
-  const repo = existing?.repo ?? parsed.data.repo;
-  if (!repo) return reply.code(400).send({ error: 'Pick a repository first.' });
-  if (existing?.repo && parsed.data.repo && existing.repo.toLowerCase() !== parsed.data.repo.toLowerCase()) {
-    return reply.code(409).send({ error: `This conversation is about ${existing.repo}. Start a new chat to work on ${parsed.data.repo}.` });
-  }
-  const user = { login: me.login, ctx: { ...me.ctx, repo } };
-  const waiting = existing?.pending;
-  if (waiting) {
-    // A side question: read and client tools only, on a copy of the conversation (agent/side.ts).
-    try {
-      const started = startRun(parsed.data.threadId, async (thread, emit, run) => {
-        const deps = agentDeps(user, thread.id, thread.model, emit, run);
-        await runAgent(sideHistory(thread.messages, waiting), parsed.data.prompt, { ...deps, tools: readOnlyTools(deps.tools), actions: {}, readOnly: true });
-      }, { prompt: parsed.data.prompt, owner: user.login, repo });
-      return reply.code(202).send(started);
-    } catch (err) {
-      if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
-      throw err;
-    }
-  }
-
-  try {
-    const started = startRun(parsed.data.threadId, async (thread, emit, run) => {
-      const before = thread.messages.length;
-      thread.model = parsed.data.model;
-      const followups = trackFollowups(emit);
-      try {
-        const outcome = await runAgent(thread.messages, parsed.data.prompt, agentDeps(user, thread.id, thread.model, followups.emit, run, parsed.data.reviewPullRequest));
-        if (outcome.status === 'awaiting-approval') thread.pending = { ...outcome.pending, prompt: parsed.data.prompt };
-        else followups.finish();
-      } catch (err) {
-        // Drop the half-finished turn so the next prompt starts from a consistent history.
-        thread.messages.splice(before);
-        req.log.warn({ err: (err as Error).message }, 'run failed');
-        throw err;
-      }
-    }, { prompt: parsed.data.prompt, owner: user.login, repo });
-    return reply.code(202).send(started);
-  } catch (err) {
-    if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
-    throw err;
-  }
-});
-
-const ActionBody = z.object({
-  toolCallId: z.string().min(1).max(100),
-  decision: z.enum(['approve', 'reject']),
-  selected: z.array(z.number().int().positive()).max(100).optional(),
-  // Shape-checked by the tool's own schema in the loop; only the size is limited here.
-  edits: z.unknown().refine((v) => v === undefined || JSON.stringify(v).length <= 40_000, 'edits too large').optional(),
-});
-
-/**
- * The user's answer to an ApprovalCard. Starts a new run on the same thread
- * that carries out the decision and lets the model summarise it; the client
- * streams it with GET /api/runs/:newRunId/events. Each approval can be answered
- * once, and only by the person who started the conversation.
- */
-app.post<{ Params: { id: string } }>('/api/runs/:id/actions', async (req, reply) => {
-  const parsed = ActionBody.safeParse(req.body);
-  if (!parsed.success) {
-    return reply.code(400).send({ error: "Send { toolCallId: string, decision: 'approve' | 'reject', selected?: number[] }." });
-  }
-  const { toolCallId, decision, selected, edits } = parsed.data;
-  let thread = findPendingByRun(req.params.id);
-  if (!thread && store) {
-    // After a restart the paused run lives only in the database.
-    await ensureThread((await store.findSessionPendingOnRun(req.params.id).catch(() => null)) ?? undefined);
-    thread = findPendingByRun(req.params.id);
-  }
-  const me = who(req);
-  // The change runs on the conversation's repository, whatever is selected in the app now.
-  const user = { login: me.login, ctx: { ...me.ctx, repo: thread?.repo } };
-  const pending = thread?.pending;
-  if (!thread || !pending || pending.callId !== toolCallId || (thread.owner && thread.owner !== user.login)) {
-    return reply.code(404).send({ error: 'No approval is waiting for this run. It may have been answered already.' });
-  }
-  const approve = decision === 'approve';
-  if (approve && !pending.allowEmpty && pending.ids.length > 0 && !(selected ?? pending.ids).some((id) => pending.ids.includes(id))) {
-    return reply.code(400).send({ error: 'Select at least one item to approve.' });
-  }
-
-  thread.pending = undefined; // answered exactly once
-  try {
-    const started = startRun(thread.id, async (t, emit, run) => {
-      const followups = trackFollowups(emit);
-      const outcome = await resumeAgent(t.messages, pending, { approve, selected, edits }, agentDeps(user, t.id, t.model, followups.emit, run));
-      if (outcome.status === 'awaiting-approval') t.pending = { ...outcome.pending, prompt: pending.prompt };
-      else followups.finish();
-    });
-    req.log.info({ tool: pending.tool, decision, selected: selected?.length }, 'approval answered');
-    return reply.code(202).send(started);
-  } catch (err) {
-    thread.pending = pending;
-    if (err instanceof ThreadBusyError) return reply.code(409).send({ error: err.message });
-    throw err;
-  }
-});
-
-/** Server-Sent Events: one `data:` line per AgentEvent; closes after RUN_FINISHED / RUN_ERROR. */
-app.get<{ Params: { id: string } }>('/api/runs/:id/events', (req, reply) => {
-  const send = (event: AgentEvent) => {
-    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-    if (isTerminal(event)) close();
-  };
-
-  reply.hijack();
-  reply.raw.writeHead(200, {
-    'content-type': 'text/event-stream; charset=utf-8',
-    'cache-control': 'no-cache, no-transform',
-    connection: 'keep-alive',
-    'x-accel-buffering': 'no',
-  });
-
-  let unsubscribe: (() => void) | null = null;
-  const heartbeat = setInterval(() => reply.raw.write(': keep-alive\n\n'), 15_000);
-  function close() {
-    clearInterval(heartbeat);
-    unsubscribe?.();
-    if (!reply.raw.writableEnded) reply.raw.end();
-  }
-  req.raw.on('close', close);
-
-  // Only the conversation's owner may watch its runs.
-  const owner = runOwner(req.params.id);
-  unsubscribe = owner && owner !== who(req).login ? null : subscribe(req.params.id, send);
-  if (!unsubscribe) {
-    send({ type: 'RUN_ERROR', message: 'Unknown or expired run.', code: 'not_found' });
-  }
+// AG-UI: POST /api/agent (every run), GET /api/agent/capabilities; A2UI: GET /api/a2ui/catalog.
+registerAgentRoutes(app, {
+  who,
+  githubReady,
+  noGithub: NO_GITHUB,
+  ensureThread: (id) => ensureThread(id),
+  toolDefs,
+  agentDeps,
 });
 
 try {

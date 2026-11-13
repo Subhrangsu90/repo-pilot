@@ -6,7 +6,8 @@ import { AgentSession } from '../../core/agent-session';
 import { ServerStatus } from '../../core/server-status';
 import { onRepoSwitch, RepoChoice } from '../../core/repo';
 import { StepTimeline } from '../../genui/components/step-timeline';
-import { GenUiHost } from '../../genui/genui-host';
+import { A2uiSurfaceView } from '../../genui/a2ui-surface';
+import { surfaceComponent, type ShownSurface } from '../../core/agent-run';
 
 type Row = PropsOf<'IssueTable'>['rows'][number];
 type State = 'open' | 'closed' | 'all';
@@ -45,7 +46,7 @@ export function bulkPrompt(action: 'close' | 'reopen', numbers: number[]): strin
  */
 @Component({
   selector: 'app-issue-list',
-  imports: [GenUiHost, StepTimeline],
+  imports: [A2uiSurfaceView, StepTimeline],
   providers: [AgentSession],
   host: { class: 'block' },
   template: `
@@ -95,7 +96,8 @@ export function bulkPrompt(action: 'close' | 'reopen', numbers: number[]): strin
           <button type="button" class="btn" (click)="issues.reload()">Retry</button>
         </div>
       } @else if (table(); as node) {
-        <app-genui-host [node]="node" [emit]="onEmit" />
+        <!-- Built by the app from GET /api/issues, rendered through A2UI like the agent's surfaces. -->
+        <app-a2ui-surface [node]="node" [emit]="onEmit" />
         @if (truncated()) {
           <p class="text-body-sm text-fg-muted">Showing the first 100 issues.</p>
         }
@@ -124,8 +126,8 @@ export function bulkPrompt(action: 'close' | 'reopen', numbers: number[]): strin
 
           <!-- Only the gate: the issues themselves are already in the table above. -->
           @for (surface of t.surfaces; track surface.surfaceId) {
-            @if (isGate(surface.node)) {
-              <app-genui-host class="animate-genui-enter" [node]="surface.node" [emit]="onEmit" />
+            @if (isGate(surface)) {
+              <app-a2ui-surface class="animate-genui-enter" [operations]="surface.operations" [emit]="onEmit" />
             }
           }
 
@@ -236,11 +238,11 @@ export class IssueList {
     void this.session.send(bulkPrompt(action, numbers));
   }
 
-  protected isGate(node: unknown): boolean {
-    return (node as { component?: unknown } | null)?.component === 'ApprovalCard';
+  protected isGate(surface: ShownSurface): boolean {
+    return surfaceComponent(surface) === 'ApprovalCard';
   }
 
-  protected hasGate(surfaces: { node: unknown }[]): boolean {
-    return surfaces.some((s) => this.isGate(s.node));
+  protected hasGate(surfaces: ShownSurface[]): boolean {
+    return surfaces.some((s) => this.isGate(s));
   }
 }

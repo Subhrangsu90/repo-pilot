@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@repopilot/shared';
+import type { AgUiEvent } from '@repopilot/shared';
 
 /** GET /api/sessions items (History list). */
 export interface SessionSummary {
@@ -23,7 +23,7 @@ export interface SavedSession {
   repo: string;
   createdAt: string;
   updatedAt: string;
-  runs: { id: string; prompt: string | null; status: string; events: AgentEvent[]; createdAt: string }[];
+  runs: { id: string; prompt: string | null; status: string; events: AgUiEvent[]; createdAt: string }[];
   /** Surfaces made by read tools, which Refresh can re-run; with when each was captured. */
   refreshable?: { surfaceId: string; capturedAt: string }[];
 }
